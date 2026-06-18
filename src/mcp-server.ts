@@ -1,19 +1,110 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
+import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import * as z from 'zod/v4';
 
-import { getActiveRepo } from './platform-config.js';
+import { getActiveRepo, readReposConfig } from './platform-config.js';
 import { createPlatformApi } from './mcp-tools.js';
 import { createWorkspace } from './workspace.js';
 
+export const sessionStore = new AsyncLocalStorage<{ sessionId: string }>();
+export const sessionWorkspaceMap = new Map<string, string>(); // sessionId -> repoId
+
+export async function getSessionApi() {
+  const session = sessionStore.getStore();
+  const sessionId = session ? session.sessionId : 'default';
+
+  let repoId = sessionWorkspaceMap.get(sessionId);
+  const config = await readReposConfig();
+
+  if (!repoId) {
+    const currentDir = path.resolve(process.cwd());
+    const matchingRepo = config.repos.find((r) => path.resolve(r.root) === currentDir);
+    if (matchingRepo) {
+      repoId = matchingRepo.id;
+      sessionWorkspaceMap.set(sessionId, repoId);
+    } else {
+      const activeRepo = await getActiveRepo();
+      repoId = activeRepo.id;
+      sessionWorkspaceMap.set(sessionId, repoId);
+    }
+  }
+
+  const repo = config.repos.find((r) => r.id === repoId);
+  if (!repo) {
+    throw new Error(`Workspace ${repoId} is not registered.`);
+  }
+
+  const workspace = createWorkspace(repo.root);
+  return createPlatformApi(workspace);
+}
+
+export const api = new Proxy({} as any, {
+  get(target, prop) {
+    return async (...args: any[]) => {
+      const activeApi = await getSessionApi();
+      return (activeApi as any)[prop](...args);
+    };
+  }
+});
+
 export async function buildMcpServer() {
-  const activeRepo = await getActiveRepo();
-  const workspace = createWorkspace(activeRepo.root);
-  const api = createPlatformApi(workspace);
   const server = new McpServer({
     name: 'projectmesh',
     version: '0.1.0',
   });
+
+  server.registerTool(
+    'list_workspaces',
+    {
+      description: 'List all registered repositories/workspaces in the ProjectMesh registry.',
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const config = await readReposConfig();
+      const session = sessionStore.getStore();
+      const sessionId = session ? session.sessionId : 'default';
+      const activeId = sessionWorkspaceMap.get(sessionId) || config.activeRepoId;
+
+      const workspaces = config.repos.map((repo) => ({
+        id: repo.id,
+        name: repo.name,
+        root: repo.root,
+        active: repo.id === activeId,
+      }));
+
+      return { content: [{ type: 'text', text: JSON.stringify(workspaces, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'switch_workspace',
+    {
+      description: 'Switch the active workspace context for the current session.',
+      inputSchema: z.object({
+        repoId: z.string().describe('The ID of the repository/workspace to switch to.'),
+      }),
+    },
+    async ({ repoId }) => {
+      const config = await readReposConfig();
+      const repo = config.repos.find((r) => r.id === repoId);
+      if (!repo) {
+        return {
+          content: [{ type: 'text', text: `Workspace with ID '${repoId}' is not registered.` }],
+          isError: true,
+        };
+      }
+
+      const session = sessionStore.getStore();
+      const sessionId = session ? session.sessionId : 'default';
+      sessionWorkspaceMap.set(sessionId, repoId);
+
+      return {
+        content: [{ type: 'text', text: `Successfully switched workspace context to ${repo.name} (${repo.root}) for this session.` }],
+      };
+    },
+  );
 
   server.registerTool(
     'read_file',
@@ -264,7 +355,7 @@ export async function buildMcpServer() {
       inputSchema: z.object({ path: z.string() }),
     },
     async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(api.verifyProjectmeshWritePermissions(input), null, 2) }],
+      content: [{ type: 'text', text: JSON.stringify(await api.verifyProjectmeshWritePermissions(input), null, 2) }],
     }),
   );
 

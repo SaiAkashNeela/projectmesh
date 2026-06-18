@@ -1,49 +1,49 @@
 # Active Task
 
 ## Objective
-Replace single active.md task workflow with a multi-task system that supports multiple AI chats and agents without overwriting tasks.
+Add multi-repository workspace registry support so different AI chats can work with different ProjectMesh-enabled repos.
 
 ## Background
-ProjectMesh currently uses .projectmesh/tasks/active.md as the handoff point. This works for one task at a time but multiple architect chats could overwrite each other's work. The task system should support concurrent tasks while keeping the architect -> context packet -> executor workflow.
+ProjectMesh currently operates around a single active workspace. For the multi-project AI architect workflow, users should be able to have multiple repositories registered and select the correct repo context per AI session without mixing project context.
 
 ## Requirements
-- Move from a single active.md model to unique task files.
-- Create unique task IDs automatically (example: task-001, task-002).
-- Determine the next task ID by checking existing tasks or maintaining a reliable index.
-- Never overwrite existing tasks when creating a new task.
-- Support active, completed, and future backlog task states.
-- Keep backwards compatibility by handling existing active.md if needed.
-- Keep all task data inside repo-local .projectmesh.
+- Create a global ProjectMesh repository registry (for example ~/.projectmesh/repos.json).
+- Register repositories when ProjectMesh is initialized/setup.
+- Store repository name, path, and relevant workspace metadata.
+- Add MCP support to list available workspaces.
+- Add MCP support to select/switch the workspace context for a session.
+- Ensure selected workspace controls which .projectmesh files and tools are exposed.
+- Prevent context leakage between different repositories.
+- Keep existing single-workspace behaviour working for compatibility.
 
 ## Affected Files
 - src/
 - tests/
 - README.md
-- .projectmesh/tasks/
+- .projectmesh/
 
 ## Implementation Plan
-- Inspect current task creation, MCP tools, and task packet generation flow.
-- Design task ID generation logic.
-- Add multi-task folder structure under .projectmesh/tasks.
-- Implement task creation that generates the next available ID safely.
-- Add migration/compatibility handling for existing active.md.
-- Update execution flow so agents can select a specific task.
-- Add tests for ID generation, duplicate prevention, migration, and execution selection.
-- Update documentation.
+- Inspect current workspace selection and MCP context handling.
+- Design global repository registry storage.
+- Implement repository registration and lookup.
+- Add workspace listing MCP capability.
+- Add session-scoped workspace selection.
+- Ensure all existing task/context operations use the selected workspace.
+- Add tests for multiple repos, switching, and isolation.
+- Update documentation with multi-project workflow.
 
 ## Acceptance Criteria
-- Creating multiple tasks does not overwrite previous tasks.
-- Task IDs are generated automatically and safely.
-- Existing tasks remain accessible.
-- Executor agents can target a specific task.
-- Tests cover task creation and ID handling.
-- README reflects the multi-task workflow.
+- Multiple ProjectMesh repos can be registered.
+- Different AI sessions can target different repositories.
+- Selecting one repo does not expose another repo's context.
+- Existing commands continue working.
+- Tests verify repository isolation.
+- Documentation explains the new workflow.
 
 ## Risks
-- Do not break existing ProjectMesh workflow.
-- Avoid duplicate task IDs.
-- Do not move state outside .projectmesh.
-- Keep active.md compatibility if existing users rely on it.
+- Do not make all registered repositories readable at once.
+- Do not leak .projectmesh data between projects.
+- Keep backwards compatibility.
 
 ## Status
 completed

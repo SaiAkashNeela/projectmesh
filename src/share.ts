@@ -13,7 +13,7 @@ import * as tar from 'tar';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 
 import { DASHBOARD_PORT } from './dashboard.js';
-import { buildMcpServer } from './mcp-server.js';
+import { buildMcpServer, sessionStore } from './mcp-server.js';
 import { ensurePlatformDirectories, getPlatformHome } from './platform-config.js';
 
 export const MCP_HTTP_PORT = 3334;
@@ -365,12 +365,26 @@ export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1
         return;
       }
 
-      const mcpServer = await buildMcpServer();
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
+      let sessionId = url.searchParams.get('sessionId') || url.searchParams.get('session');
+      if (!sessionId) {
+        const pathSegments = url.pathname.split('/');
+        const mcpIndex = pathSegments.indexOf('mcp');
+        if (mcpIndex !== -1 && pathSegments.length > mcpIndex + 1) {
+          sessionId = pathSegments[mcpIndex + 1];
+        }
+      }
+      if (!sessionId) {
+        sessionId = 'default';
+      }
+
+      await sessionStore.run({ sessionId }, async () => {
+        const mcpServer = await buildMcpServer();
+        const transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        await mcpServer.connect(transport);
+        await transport.handleRequest(req, res);
       });
-      await mcpServer.connect(transport);
-      await transport.handleRequest(req, res);
     } catch (error) {
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(error instanceof Error ? error.message : String(error));

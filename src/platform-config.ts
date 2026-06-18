@@ -75,6 +75,12 @@ export async function setActiveRepo(root: string, name?: string) {
 
 export async function getActiveRepo() {
   const config = await readReposConfig();
+  const currentDir = path.resolve(process.cwd());
+  const matchingRepo = config.repos.find((entry) => path.resolve(entry.root) === currentDir);
+  if (matchingRepo) {
+    return matchingRepo;
+  }
+
   if (!config.activeRepoId) {
     throw new PlatformConfigError('No active workspace selected. Run `projectmesh use <path>` first.');
   }
