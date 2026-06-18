@@ -141,13 +141,13 @@ export async function runCli(argv: string[]) {
         const analysis = await analyzeRepository(workspace);
         await updateArchitectureFromAnalysis(workspace, analysis);
         return [
-          `Active workspace: ${repo.root}`,
+          `Workspace: ${repo.root}`,
           `Initialized Projectmesh workspace at ${workspace.projectmeshDir}`,
           `Architecture written to ${workspace.projectmeshDir}/architecture.md`,
         ].join('\n');
       }
 
-      return `Active workspace: ${repo.root}`;
+      return `Workspace: ${repo.root}`;
     }
     case 'status': {
       const repo = await getActiveRepo();
@@ -171,10 +171,10 @@ export async function runCli(argv: string[]) {
       } catch {}
 
       return [
-        `Active workspace: ${repo.root}`,
+        `Workspace: ${repo.root}`,
         `Task status: ${taskStatus}`,
         state
-          ? `Service status: running\nChatGPT MCP URL: ${state.chatGptUrl}\nLocal MCP endpoint: http://${state.mcp.host}:${state.mcp.port}${state.mcp.path}\nDashboard URL: ${state.dashboard.url}`
+          ? `Service status: running\nMCP URL: ${state.chatGptUrl}\nLocal MCP endpoint: http://${state.mcp.host}:${state.mcp.port}${state.mcp.path}\nDashboard URL: ${state.dashboard.url}`
           : 'Service status: stopped',
       ].join('\n');
     }
@@ -198,11 +198,11 @@ export async function runCli(argv: string[]) {
         throw new Error('Projectmesh failed to start background services.');
       }
       return [
-        `Active workspace: ${repo.root}`,
+        `Workspace: ${repo.root}`,
         `Architecture written to ${workspace.projectmeshDir}/architecture.md`,
         '',
         '# Projectmesh Ready',
-        `ChatGPT MCP URL: ${state.chatGptUrl}`,
+        `MCP URL: ${state.chatGptUrl}`,
         `Local MCP endpoint: http://${state.mcp.host}:${state.mcp.port}${state.mcp.path}`,
         `Dashboard URL: ${state.dashboard.url}`,
         '',
@@ -217,7 +217,7 @@ export async function runCli(argv: string[]) {
       }
       return [
         '# Projectmesh Started',
-        `ChatGPT MCP URL: ${state.chatGptUrl}`,
+        `MCP URL: ${state.chatGptUrl}`,
         `Local MCP endpoint: http://${state.mcp.host}:${state.mcp.port}${state.mcp.path}`,
         `Dashboard URL: ${state.dashboard.url}`,
         '',
@@ -526,7 +526,7 @@ export async function runCli(argv: string[]) {
       }
       return [
         '# Projectmesh Share Ready',
-        `ChatGPT MCP URL: ${state.chatGptUrl}`,
+        `MCP URL: ${state.chatGptUrl}`,
         `Local MCP endpoint: http://${state.mcp.host}:${state.mcp.port}${state.mcp.path}`,
         `Dashboard URL: ${state.dashboard.url}`,
         '',

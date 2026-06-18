@@ -60,7 +60,7 @@ async function buildDashboardPayload() {
       projectCount: projects.length,
       activeProjectName: activeRepo?.name ?? null,
       activeProjectRoot: activeRepo?.root ?? null,
-      chatGptHasAccessTo: projects.filter((project) => project.hasProjectmeshWorkspace).length,
+      readyWorkspacesCount: projects.filter((project) => project.hasProjectmeshWorkspace).length,
       localMcpUrl: serviceState ? `http://${serviceState.mcp.host}:${serviceState.mcp.port}${serviceState.mcp.path}` : null,
       publicMcpUrl: serviceState?.chatGptUrl ?? null,
       dashboardUrl: `http://127.0.0.1:${DASHBOARD_PORT}`,
@@ -373,7 +373,7 @@ function pageHtml() {
     <section class="hero">
       <article class="panel hero-main">
         <div class="eyebrow">Projectmesh Control Plane</div>
-        <h1>See what ChatGPT can touch, what is live, and what needs attention.</h1>
+        <h1>See what AI clients can touch, what is live, and what needs attention.</h1>
         <p class="lede">
           Projectmesh keeps repo access grounded in two places: repo-local context inside
           <code>.projectmesh/</code> and global coordination inside <code>~/.projectmesh/</code>.
@@ -384,12 +384,12 @@ function pageHtml() {
 
       <aside class="panel hero-side">
         <div class="kicker">Live Endpoint</div>
-        <h2>ChatGPT MCP URL</h2>
+        <h2>MCP URL</h2>
         <div class="url-box" id="publicUrl">Waiting for Projectmesh…</div>
         <div class="kicker">Local Endpoint</div>
         <div class="url-box" id="localUrl">http://127.0.0.1:3334/mcp</div>
         <div class="warning">
-          This MCP endpoint currently has no OAuth or auth wall. Do not share the public tunnel URL with people you do not trust.
+          This MCP endpoint can be accessed by any AI client (ChatGPT, Claude, Cursor, Copilot, etc.) that supports MCP tool calling. Currently has no OAuth or auth wall; do not share the public tunnel URL.
         </div>
       </aside>
     </section>
@@ -403,7 +403,7 @@ function pageHtml() {
 
       <aside class="panel section">
         <div class="kicker">Access Model</div>
-        <h2>What ChatGPT can see</h2>
+        <h2>What AI clients can see</h2>
         <div class="project-list" id="accessList"></div>
       </aside>
     </section>
@@ -460,7 +460,7 @@ function pageHtml() {
       heroStats.innerHTML = '';
       const cards = [
         { value: summary.projectCount, label: 'Registered projects' },
-        { value: summary.chatGptHasAccessTo, label: 'Projects ChatGPT can write to' },
+        { value: summary.readyWorkspacesCount, label: 'Workspaces ready for AI' },
         { value: summary.publicMcpUrl ? 'Live' : 'Idle', label: 'Tunnel state' }
       ];
       cards.forEach(card => {

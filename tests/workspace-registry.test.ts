@@ -86,6 +86,6 @@ describe('multi-repository workspace registry and session isolation', () => {
     
     // Call runCli with 'new' on already initialized path -> should just report active root (not re-initialize)
     const output2 = await runCli(['new', root]);
-    expect(output2).toBe(`Active workspace: ${path.resolve(root)}`);
+    expect(output2).toBe(`Workspace: ${path.resolve(root)}`);
   });
 });

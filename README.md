@@ -2,8 +2,8 @@
 
 Projectmesh is a local AI engineering platform that cleanly splits responsibilities:
 
-- ChatGPT can inspect your repository and write only inside `.projectmesh/`
-- Codex can later consume `.projectmesh` tasks and implement source code changes
+- AI clients (ChatGPT, Claude, Cursor, Copilot, etc.) can inspect your repository and write only inside `.projectmesh/` using the Model Context Protocol (MCP)
+- Local execution tools (e.g. Claude Code, Codex, Gemini) can later consume `.projectmesh` tasks and implement source code changes
 - Projectmesh exposes your local MCP server over `localhost:3334` and can tunnel it through `ngrok`
 
 ## Install
@@ -44,7 +44,7 @@ projectmesh setup
 
 What it does:
 
-1. Selects the active repository workspace
+1. Registers the repository workspace in the platform configuration
 2. Creates the `.projectmesh/` workspace if it does not exist yet
 3. Generates `.projectmesh/architecture.md`
 4. Installs or reuses `ngrok` on supported macOS/Linux systems
@@ -61,14 +61,14 @@ Get your token here:
 6. Starts the local MCP HTTP server on `http://127.0.0.1:3334/mcp`
 7. Starts `ngrok http 3334` in the background
 8. Starts the Projectmesh dashboard on `http://127.0.0.1:3335`
-9. Prints the final ChatGPT-ready MCP URL
+9. Prints the final public MCP URL
 
 ## AI Handoff Workflow: Architect & Executor
 
 Projectmesh is designed as a repository-native collaboration layer that enables a structured handoff between AI agents:
 
-1. **Architect Mode (e.g., ChatGPT)**:
-   * ChatGPT connects via the Projectmesh MCP server.
+1. **Architect Mode (e.g., ChatGPT, Claude)**:
+   * The architect AI client connects via the Projectmesh MCP server.
    * It inspects repository structure and writes/plans tasks inside `.projectmesh/tasks/active.md` (using the `create_task`/`update_task` tools).
    * It documents decisions in `.projectmesh/decisions.md` and durable memory in `.projectmesh/memory.md`.
 
@@ -99,6 +99,28 @@ Projectmesh is designed as a repository-native collaboration layer that enables 
 4. **Execution Review & Tracking**:
    * Once the executor finishes, Projectmesh automatically captures the execution duration, exit code, and git changes.
    * It writes a durable markdown report in `.projectmesh/reviews/execution-report-<timestamp>.md` to track changes and results, maintaining history inside your repository.
+
+## Multi-Repository Workspace Registry & Session Isolation
+
+Projectmesh supports registering multiple workspaces and isolating them across different AI chat sessions or connections:
+
+1. **Multi-Repository Registry**:
+   * You can register multiple repositories by running:
+     ```bash
+     projectmesh new /absolute/path/to/repo
+     # or
+     projectmesh use /absolute/path/to/repo
+     ```
+   * The server tracks all registered workspaces in `~/.projectmesh/repos.json`.
+
+2. **Session-Level Isolation**:
+   * Different chat threads or client connections can connect to the same Projectmesh MCP server concurrently.
+   * Each connection has its own isolated session context (mapped via a unique `sessionId` query parameter or path segment in the HTTP MCP URL, e.g., `/mcp?sessionId=thread-123`).
+   * One session can be targeting `repo-A` while another session targets `repo-B` concurrently with zero context leakage.
+
+3. **Workspace MCP Tools**:
+   * **`list_workspaces`**: Returns all registered workspaces, showing their registration paths and identifying the workspace currently active for the caller's session.
+   * **`switch_workspace`**: Dynamically switches the workspace context for the current chat session to another registered repository using its ID or path.
 
 ## Commands
 
@@ -137,7 +159,7 @@ projectmesh-mcp-http mcp-http
 projectmesh-share share
 ```
 
-## How ChatGPT connects
+## How AI clients connect (ChatGPT, Claude, Cursor, etc.)
 
 Projectmesh exposes MCP over HTTP at:
 
@@ -151,7 +173,7 @@ When you run `projectmesh share`, it starts both background services and prints 
 https://example.ngrok.app/mcp
 ```
 
-That is the URL you can paste into ChatGPT MCP configuration.
+That is the URL you can paste into your AI client's MCP configuration (e.g., ChatGPT Custom Actions, Claude desktop config, Cursor, or Copilot).
 
 The local dashboard runs here:
 
@@ -161,7 +183,7 @@ http://127.0.0.1:3335
 
 It shows:
 
-- how many registered projects ChatGPT can access
+- how many registered projects are ready for AI client access
 - which project is active
 - the local and public MCP URLs
 - repo-local `.projectmesh` status
@@ -217,5 +239,6 @@ bun run build
 - `src/ai-workspace.ts`: task, review, memory, decision, and architecture document flows
 - `src/repository-analysis.ts`: repository analysis and project context
 - `src/git.ts`: fixed-argument git readers with no shell execution
-- `src/mcp-server.ts`: stdio MCP server for local MCP hosts
+- `src/mcp-server.ts`: stdio MCP server for local MCP hosts and session-isolated tool execution
 - `src/share.ts`: localhost HTTP MCP server, ngrok install flow, and background service management
+- `src/platform-config.ts`: repository registration registry (`repos.json`) and active workspace matching

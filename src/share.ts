@@ -543,7 +543,7 @@ export async function shareMcpServer(options: { detached?: boolean } = {}) {
     ngrok.stderr.on('data', (chunk) => process.stderr.write(chunk));
     const publicBaseUrl = await waitForNgrokUrl();
     const chatGptUrl = buildChatGptMcpUrl(publicBaseUrl);
-    process.stdout.write(`ChatGPT MCP URL: ${chatGptUrl}\n`);
+    process.stdout.write(`MCP URL: ${chatGptUrl}\n`);
     const shutdown = async () => {
       ngrok.kill('SIGTERM');
       await localServer.close();
