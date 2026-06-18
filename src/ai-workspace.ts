@@ -1,0 +1,174 @@
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+
+import type { AnalysisResult, CompleteTaskInput, ReviewInput, TaskInput } from './types.js';
+import type { Workspace } from './workspace.js';
+
+function nowStamp() {
+  return new Date().toISOString();
+}
+
+function slugify(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'entry';
+}
+
+function asBulletList(items: string[]) {
+  return items.length ? items.map((item) => `- ${item}`).join('\n') : '- None';
+}
+
+export async function ensureProjectmeshWorkspace(workspace: Workspace) {
+  const dirs = [
+    '.projectmesh',
+    '.projectmesh/reviews',
+    '.projectmesh/tasks',
+    '.projectmesh/tasks/completed',
+    '.projectmesh/context',
+  ];
+  for (const dir of dirs) {
+    await mkdir(path.join(workspace.root, dir), { recursive: true });
+  }
+
+  const defaults: Array<[string, string]> = [
+    ['.projectmesh/architecture.md', '# Repository Architecture\n\n'],
+    ['.projectmesh/decisions.md', '# Architectural Decisions\n\n'],
+    ['.projectmesh/coding-style.md', '# Coding Style\n\n'],
+    ['.projectmesh/memory.md', '# Working Memory\n\n'],
+  ];
+
+  for (const [file, content] of defaults) {
+    try {
+      await workspace.readTextFile(file);
+    } catch {
+      await workspace.writeProjectmeshTextFile(file, content);
+    }
+  }
+}
+
+export async function createTask(workspace: Workspace, input: TaskInput) {
+  await ensureProjectmeshWorkspace(workspace);
+  const markdown = [
+    '# Active Task',
+    '',
+    '## Objective',
+    input.objective,
+    '',
+    '## Background',
+    input.background,
+    '',
+    '## Requirements',
+    asBulletList(input.requirements),
+    '',
+    '## Affected Files',
+    asBulletList(input.affectedFiles),
+    '',
+    '## Implementation Plan',
+    asBulletList(input.implementationPlan),
+    '',
+    '## Acceptance Criteria',
+    asBulletList(input.acceptanceCriteria),
+    '',
+    '## Risks',
+    asBulletList(input.risks),
+    '',
+    '## Status',
+    input.status,
+    '',
+  ].join('\n');
+
+  return workspace.writeProjectmeshTextFile('.projectmesh/tasks/active.md', markdown);
+}
+
+export async function completeTask(workspace: Workspace, input: CompleteTaskInput) {
+  await ensureProjectmeshWorkspace(workspace);
+  const activeRelative = '.projectmesh/tasks/active.md';
+  const current = await workspace.readTextFile(activeRelative);
+  const archivedName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${slugify(input.summary)}.md`;
+  const archivedRelative = `.projectmesh/tasks/completed/${archivedName}`;
+  const archivedAbsolute = workspace.resolveProjectmeshWritePath(archivedRelative);
+  const archivedText = `${current}\n## Completion Summary\n${input.summary}\n\n## Final Status\n${input.finalStatus}\n`;
+  await workspace.writeProjectmeshTextFile(archivedRelative, archivedText);
+  await workspace.writeProjectmeshTextFile(
+    activeRelative,
+    '# Active Task\n\nNo active task. The previous task was archived in `.projectmesh/tasks/completed/`.\n',
+  );
+  return archivedAbsolute;
+}
+
+export async function createReview(workspace: Workspace, input: ReviewInput) {
+  await ensureProjectmeshWorkspace(workspace);
+  const filename = `${new Date().toISOString().replace(/[:.]/g, '-')}-${slugify(input.title)}.md`;
+  const relativePath = `.projectmesh/reviews/${filename}`;
+  const content = [
+    `# ${input.title}`,
+    '',
+    `- Kind: ${input.kind}`,
+    `- Created: ${nowStamp()}`,
+    '',
+    input.body,
+    '',
+  ].join('\n');
+  return workspace.writeProjectmeshTextFile(relativePath, content);
+}
+
+async function appendSection(workspace: Workspace, relativePath: string, content: string) {
+  await ensureProjectmeshWorkspace(workspace);
+  const current = await workspace.readTextFile(relativePath);
+  const next = `${current}## ${nowStamp()}\n${content}\n\n`;
+  return workspace.writeProjectmeshTextFile(relativePath, next);
+}
+
+export async function updateMemory(workspace: Workspace, content: string) {
+  return appendSection(workspace, '.projectmesh/memory.md', content);
+}
+
+export async function updateDecision(workspace: Workspace, content: string) {
+  return appendSection(workspace, '.projectmesh/decisions.md', content);
+}
+
+export async function updateArchitecture(
+  workspace: Workspace,
+  content: string,
+  options: { append?: boolean } = {},
+) {
+  await ensureProjectmeshWorkspace(workspace);
+  if (options.append) {
+    return appendSection(workspace, '.projectmesh/architecture.md', content);
+  }
+  return workspace.writeProjectmeshTextFile('.projectmesh/architecture.md', content);
+}
+
+export function renderArchitectureMarkdown(analysis: AnalysisResult) {
+  return [
+    '# Repository Architecture',
+    '',
+    '## Detected Frameworks',
+    asBulletList(analysis.frameworks),
+    '',
+    '## Detected Languages',
+    asBulletList(analysis.languages),
+    '',
+    '## Package Manager',
+    analysis.packageManager,
+    '',
+    '## Database Technologies',
+    asBulletList(analysis.databaseTechnologies),
+    '',
+    '## Deployment Technologies',
+    asBulletList(analysis.deploymentTechnologies),
+    '',
+    '## Major Services',
+    asBulletList(analysis.majorServices),
+    '',
+    '## Folder Structure Summary',
+    asBulletList(analysis.folderStructureSummary),
+    '',
+  ].join('\n');
+}
+
+export async function updateArchitectureFromAnalysis(workspace: Workspace, analysis: AnalysisResult) {
+  return updateArchitecture(workspace, renderArchitectureMarkdown(analysis));
+}

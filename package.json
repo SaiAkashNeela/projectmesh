@@ -1,0 +1,67 @@
+{
+  "name": "projectmesh",
+  "description": "Local AI engineering platform that lets ChatGPT plan inside .projectmesh while Codex implements code changes later.",
+  "license": "MIT",
+  "private": false,
+  "version": "0.1.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/projectmesh/projectmesh.git"
+  },
+  "homepage": "https://github.com/projectmesh/projectmesh",
+  "bugs": {
+    "url": "https://github.com/projectmesh/projectmesh/issues"
+  },
+  "keywords": [
+    "ai",
+    "mcp",
+    "projectmesh",
+    "chatgpt",
+    "cli",
+    "developer-tools",
+    "repository-analysis"
+  ],
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "bin": {
+    "projectmesh": "./dist/bin/ai.js",
+    "pmesh": "./dist/bin/ai.js",
+    "projectmesh-new": "./dist/bin/ai.js",
+    "projectmesh-start": "./dist/bin/ai.js",
+    "projectmesh-stop": "./dist/bin/ai.js",
+    "projectmesh-status": "./dist/bin/ai.js",
+    "projectmesh-dashboard": "./dist/bin/ai.js",
+    "projectmesh-mcp-server": "./dist/bin/mcp-server.js",
+    "projectmesh-mcp-http": "./dist/bin/ai.js",
+    "projectmesh-share": "./dist/bin/ai.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "latest",
+    "adm-zip": "^0.5.16",
+    "tar": "^7.4.3",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
