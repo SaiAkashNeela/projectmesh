@@ -11,21 +11,21 @@ Projectmesh is a local AI engineering platform that cleanly splits responsibilit
 Global install:
 
 ```bash
-npm install -g projectmesh
+npm install -g @isan3/projectmesh
 ```
 
 ```bash
-bun add -g projectmesh
+bun add -g @isan3/projectmesh
 ```
 
 One-off execution:
 
 ```bash
-npx projectmesh setup /absolute/path/to/repo
+npx @isan3/projectmesh setup /absolute/path/to/repo
 ```
 
 ```bash
-bunx projectmesh setup /absolute/path/to/repo
+bunx @isan3/projectmesh setup /absolute/path/to/repo
 ```
 
 ## One-command setup

@@ -1,17 +1,17 @@
 {
-  "name": "projectmesh",
+  "name": "@isan3/projectmesh",
   "description": "Local AI engineering platform that lets ChatGPT plan inside .projectmesh while Codex implements code changes later.",
   "license": "MIT",
   "private": false,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/projectmesh/projectmesh.git"
+    "url": "git+https://github.com/SaiAkashNeela/projectmesh.git"
   },
-  "homepage": "https://github.com/projectmesh/projectmesh",
+  "homepage": "https://github.com/SaiAkashNeela/projectmesh",
   "bugs": {
-    "url": "https://github.com/projectmesh/projectmesh/issues"
+    "url": "https://github.com/SaiAkashNeela/projectmesh/issues"
   },
   "keywords": [
     "ai",
@@ -27,16 +27,16 @@
     "README.md"
   ],
   "bin": {
-    "projectmesh": "./dist/bin/ai.js",
-    "pmesh": "./dist/bin/ai.js",
-    "projectmesh-new": "./dist/bin/ai.js",
-    "projectmesh-start": "./dist/bin/ai.js",
-    "projectmesh-stop": "./dist/bin/ai.js",
-    "projectmesh-status": "./dist/bin/ai.js",
-    "projectmesh-dashboard": "./dist/bin/ai.js",
-    "projectmesh-mcp-server": "./dist/bin/mcp-server.js",
-    "projectmesh-mcp-http": "./dist/bin/ai.js",
-    "projectmesh-share": "./dist/bin/ai.js"
+    "projectmesh": "dist/bin/ai.js",
+    "pmesh": "dist/bin/ai.js",
+    "projectmesh-new": "dist/bin/ai.js",
+    "projectmesh-start": "dist/bin/ai.js",
+    "projectmesh-stop": "dist/bin/ai.js",
+    "projectmesh-status": "dist/bin/ai.js",
+    "projectmesh-dashboard": "dist/bin/ai.js",
+    "projectmesh-mcp-server": "dist/bin/mcp-server.js",
+    "projectmesh-mcp-http": "dist/bin/ai.js",
+    "projectmesh-share": "dist/bin/ai.js"
   },
   "exports": {
     ".": "./dist/index.js"
