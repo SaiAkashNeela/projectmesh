@@ -162,6 +162,27 @@ export async function buildMcpServer() {
   );
 
   server.registerTool(
+    'execute_task_agent',
+    {
+      description: 'Request execution of the active task by a local agent (e.g., claude, gemini, codex, custom). This will register a pending execution request which you must review and approve in your terminal by running `projectmesh execute`.',
+      inputSchema: z.object({
+        executorId: z.string().describe("The ID of the executor agent (e.g. 'claude', 'gemini', 'codex', 'custom')"),
+      }),
+    },
+    async ({ executorId }) => {
+      const pendingPath = await api.requestExecution({ executorId });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Execution request registered. For security, you must approve and run this command from your terminal: run 'projectmesh execute' to start it.`,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
     'create_review',
     {
       description: 'Create a review document under `.projectmesh/reviews/`.',

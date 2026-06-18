@@ -64,3 +64,16 @@ export interface ProjectContextResult {
   packageFiles: string[];
   analysis: AnalysisResult;
 }
+
+export interface AgentExecutor {
+  id: string;
+  name: string;
+  command: string;
+  description: string;
+}
+
+export interface PendingExecutionRequest {
+  executorId: string;
+  command: string;
+  requestedAt: string;
+}

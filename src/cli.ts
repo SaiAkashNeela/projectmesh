@@ -1,5 +1,16 @@
 import { analyzeRepository } from './repository-analysis.js';
-import { ensureProjectmeshWorkspace, generateTaskPacket, updateArchitectureFromAnalysis } from './ai-workspace.js';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline/promises';
+import {
+  ensureProjectmeshWorkspace,
+  generateTaskPacket,
+  updateArchitectureFromAnalysis,
+  SUPPORTED_EXECUTORS,
+  createPendingExecution,
+  getPendingExecution,
+  clearPendingExecution,
+  createExecutionReport,
+} from './ai-workspace.js';
 import { DASHBOARD_PORT, startDashboardServer } from './dashboard.js';
 import { getActiveRepo, readReposConfig, setActiveRepo } from './platform-config.js';
 import {
@@ -16,6 +27,7 @@ import {
   stopProjectmeshServices,
 } from './share.js';
 import { createWorkspace } from './workspace.js';
+import { createGitTools } from './git.js';
 import path from 'node:path';
 
 export function getDefaultWorkspaceTarget(cwd = process.cwd()) {
@@ -47,6 +59,7 @@ function helpText() {
     '  projectmesh stop',
     '  projectmesh share',
     '  projectmesh packet',
+    '  projectmesh execute [executor-id]',
     '  projectmesh mcp',
     '  projectmesh mcp-http [--foreground]',
     '  projectmesh dashboard [--foreground]',
@@ -163,6 +176,125 @@ export async function runCli(argv: string[]) {
         `File: ${result.filePath}`,
         '',
         'Use this packet to feed clean, self-contained context to your AI executor agent.',
+      ].join('\n');
+    }
+    case 'execute': {
+      const repo = await getActiveRepo();
+      const workspace = createWorkspace(repo.root);
+      const git = createGitTools(workspace);
+
+      // Parse arguments
+      const flags = rest.filter((arg) => arg.startsWith('-'));
+      const args = rest.filter((arg) => !arg.startsWith('-'));
+      const skipConfirm = flags.includes('--yes') || flags.includes('-y');
+
+      let executorId = args[0];
+      let resolvedCommand = '';
+
+      // Check if there is a pending request first if no executorId is provided
+      const pending = await getPendingExecution(workspace);
+
+      if (!executorId && pending) {
+        executorId = pending.executorId;
+        resolvedCommand = pending.command;
+
+        if (!skipConfirm) {
+          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          const answer = await rl.question(
+            `Detected pending execution request from MCP:\n` +
+            `  Executor: ${executorId}\n` +
+            `  Command:  ${resolvedCommand}\n\n` +
+            `Do you want to execute this? (y/N): `
+          );
+          rl.close();
+          if (answer.trim().toLowerCase() !== 'y') {
+            await clearPendingExecution(workspace);
+            return 'Execution cancelled and pending request cleared.';
+          }
+        }
+        await clearPendingExecution(workspace);
+      } else {
+        // Clear any stale pending requests
+        await clearPendingExecution(workspace);
+
+        if (!executorId) {
+          const list = SUPPORTED_EXECUTORS.map((e) => `  - ${e.id}: ${e.name} (${e.description})`).join('\n');
+          return `Usage: projectmesh execute <executor-id> [--yes]\n\nAvailable executors:\n${list}`;
+        }
+
+        const executor = SUPPORTED_EXECUTORS.find((e) => e.id === executorId);
+        if (!executor) {
+          throw new Error(`Unsupported executor ID: ${executorId}. Run 'projectmesh execute' to see supported executors.`);
+        }
+
+        // Generate the packet (or ensure it exists)
+        const packet = await generateTaskPacket(workspace);
+        const relativePacketPath = path.relative(workspace.root, packet.filePath);
+        resolvedCommand = executor.command.replace('{packetPath}', relativePacketPath);
+
+        if (!skipConfirm) {
+          const rl = createInterface({ input: process.stdin, output: process.stdout });
+          const answer = await rl.question(
+            `About to execute task using ${executor.name}:\n` +
+            `  Command: ${resolvedCommand}\n\n` +
+            `Do you want to proceed? (y/N): `
+          );
+          rl.close();
+          if (answer.trim().toLowerCase() !== 'y') {
+            return 'Execution cancelled.';
+          }
+        }
+      }
+
+      // Execute command in workspace root
+      const commandParts = resolvedCommand.split(' ');
+      const mainCmd = commandParts[0];
+      const cmdArgs = commandParts.slice(1);
+
+      // Add any extra arguments passed via CLI (excluding -y / --yes / executorId)
+      const extraArgs = rest.filter((arg) => arg !== executorId && arg !== '-y' && arg !== '--yes');
+      cmdArgs.push(...extraArgs);
+
+      const fullCommandStr = [mainCmd, ...cmdArgs].join(' ');
+      process.stdout.write(`Executing: ${fullCommandStr}\n\n`);
+
+      const startTime = Date.now();
+
+      // Spawn process in foreground
+      const exitCode = await new Promise<number>((resolve, reject) => {
+        const child = spawn(mainCmd, cmdArgs, {
+          cwd: workspace.root,
+          stdio: 'inherit',
+          shell: true
+        });
+        child.on('error', reject);
+        child.on('exit', (code) => {
+          resolve(code ?? 0);
+        });
+      });
+
+      const durationMs = Date.now() - startTime;
+
+      // Get git diff after execution
+      let diffAfter = '';
+      try {
+        diffAfter = await git.gitDiff();
+      } catch {}
+
+      const executionReportPath = await createExecutionReport(workspace, {
+        executorId,
+        command: fullCommandStr,
+        exitCode,
+        durationMs,
+        diffBeforeAfter: diffAfter
+      });
+
+      return [
+        '',
+        '# Execution Complete',
+        `Exit Code: ${exitCode}`,
+        `Duration: ${(durationMs / 1000).toFixed(2)}s`,
+        `Report generated: ${executionReportPath}`,
       ].join('\n');
     }
     case 'stop': {

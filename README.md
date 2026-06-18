@@ -83,9 +83,22 @@ Projectmesh is designed as a repository-native collaboration layer that enables 
      * High-level repository architecture, decisions, and style guide.
      * The actual source code of all files listed under `Affected Files` (safely truncated if files are too large or binary).
 
-3. **Executor Mode (e.g., Codex / Antigravity / Cursor)**:
-   * The executor agent consumes the self-contained `.projectmesh/context/active-packet.md` directly.
-   * It implements the source code changes in the repository with complete context, without needing to perform extensive, redundant scans of the entire workspace.
+3. **Agent Execution (Secure Handoff)**:
+   * The Architect agent can request local task execution via the `execute_task_agent` MCP tool (specifying an executor like `claude`, `gemini`, or `codex`).
+   * For security, the MCP server registers a pending execution request in `.projectmesh/tasks/pending-execution.json` rather than running commands automatically.
+   * To approve and run the execution locally, the user runs:
+     ```bash
+     projectmesh execute
+     ```
+   * Projectmesh will resolve the command, ask for confirmation, and run the agent in the foreground (e.g. allowing interactive shells for tools like Claude Code).
+   * Alternatively, you can directly launch an executor manually via the CLI:
+     ```bash
+     projectmesh execute claude
+     ```
+
+4. **Execution Review & Tracking**:
+   * Once the executor finishes, Projectmesh automatically captures the execution duration, exit code, and git changes.
+   * It writes a durable markdown report in `.projectmesh/reviews/execution-report-<timestamp>.md` to track changes and results, maintaining history inside your repository.
 
 ## Commands
 

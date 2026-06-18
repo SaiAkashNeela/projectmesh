@@ -1,6 +1,7 @@
 import type { AnalysisResult } from './types.js';
 import {
   completeTask,
+  createPendingExecution,
   createReview,
   createTask,
   ensureProjectmeshWorkspace,
@@ -59,6 +60,9 @@ export function createPlatformApi(workspace: Workspace) {
     },
     async generateTaskPacket() {
       return generateTaskPacket(workspace);
+    },
+    async requestExecution(input: { executorId: string }) {
+      return createPendingExecution(workspace, input.executorId);
     },
     createReview(input: Parameters<typeof createReview>[1]) {
       return createReview(workspace, input);

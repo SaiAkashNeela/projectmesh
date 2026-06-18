@@ -1,7 +1,7 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { AnalysisResult, CompleteTaskInput, ReviewInput, TaskInput } from './types.js';
+import type { AgentExecutor, AnalysisResult, CompleteTaskInput, PendingExecutionRequest, ReviewInput, TaskInput } from './types.js';
 import type { Workspace } from './workspace.js';
 
 function nowStamp() {
@@ -300,4 +300,116 @@ export async function generateTaskPacket(workspace: Workspace) {
 
   const filePath = await workspace.writeProjectmeshTextFile('.projectmesh/context/active-packet.md', markdown);
   return { filePath, content: markdown };
+}
+
+export const SUPPORTED_EXECUTORS: AgentExecutor[] = [
+  {
+    id: 'claude',
+    name: 'Claude Code',
+    command: 'claude {packetPath}',
+    description: 'Runs Claude Code CLI passing the active task packet.'
+  },
+  {
+    id: 'gemini',
+    name: 'Gemini CLI',
+    command: 'gemini-cli {packetPath}',
+    description: 'Runs Gemini CLI on the active task packet.'
+  },
+  {
+    id: 'codex',
+    name: 'Codex CLI',
+    command: 'codex-cli --task {packetPath}',
+    description: 'Runs Codex CLI on the active task packet.'
+  },
+  {
+    id: 'custom',
+    name: 'Custom Script',
+    command: 'sh .projectmesh/execute.sh {packetPath}',
+    description: 'Runs a custom project-specific execution script.'
+  }
+];
+
+export async function createPendingExecution(workspace: Workspace, executorId: string): Promise<string> {
+  await ensureProjectmeshWorkspace(workspace);
+  const executor = SUPPORTED_EXECUTORS.find((e) => e.id === executorId);
+  if (!executor) {
+    throw new Error(`Unsupported executor ID: ${executorId}`);
+  }
+
+  // Ensure active task and packet exist (otherwise generate packet)
+  let activePacketPath = '';
+  try {
+    const packet = await generateTaskPacket(workspace);
+    activePacketPath = packet.filePath;
+  } catch (error) {
+    throw new Error(`Failed to initialize task packet for execution: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const relativePacketPath = path.relative(workspace.root, activePacketPath);
+  const resolvedCommand = executor.command.replace('{packetPath}', relativePacketPath);
+
+  const request: PendingExecutionRequest = {
+    executorId,
+    command: resolvedCommand,
+    requestedAt: nowStamp()
+  };
+
+  const pendingFilePath = '.projectmesh/tasks/pending-execution.json';
+  await workspace.writeProjectmeshTextFile(pendingFilePath, JSON.stringify(request, null, 2));
+  return workspace.resolveProjectmeshWritePath(pendingFilePath);
+}
+
+export async function getPendingExecution(workspace: Workspace): Promise<PendingExecutionRequest | null> {
+  try {
+    const content = await workspace.readTextFile('.projectmesh/tasks/pending-execution.json');
+    return JSON.parse(content) as PendingExecutionRequest;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearPendingExecution(workspace: Workspace): Promise<void> {
+  const filePath = workspace.resolveProjectmeshWritePath('.projectmesh/tasks/pending-execution.json');
+  try {
+    const { unlink } = await import('node:fs/promises');
+    await unlink(filePath);
+  } catch {}
+}
+
+export async function createExecutionReport(
+  workspace: Workspace,
+  input: {
+    executorId: string;
+    command: string;
+    exitCode: number;
+    durationMs: number;
+    diffBeforeAfter: string;
+  }
+): Promise<string> {
+  await ensureProjectmeshWorkspace(workspace);
+  const timestamp = nowStamp().replace(/[:.]/g, '-');
+  const filename = `execution-report-${timestamp}.md`;
+  const relativePath = `.projectmesh/reviews/${filename}`;
+
+  const status = input.exitCode === 0 ? 'SUCCESS' : 'FAILURE';
+  const durationSec = (input.durationMs / 1000).toFixed(2);
+
+  const markdown = [
+    `# Execution Report: ${status}`,
+    '',
+    `- **Executor**: ${input.executorId}`,
+    `- **Command**: \`${input.command}\``,
+    `- **Exit Code**: ${input.exitCode}`,
+    `- **Duration**: ${durationSec}s`,
+    `- **Timestamp**: ${nowStamp()}`,
+    '',
+    '## Changes / Git Diff',
+    '',
+    input.diffBeforeAfter.trim()
+      ? `\`\`\`diff\n${input.diffBeforeAfter.trim()}\n\`\`\``
+      : '*No changes detected in the workspace.*',
+    '',
+  ].join('\n');
+
+  return workspace.writeProjectmeshTextFile(relativePath, markdown);
 }
