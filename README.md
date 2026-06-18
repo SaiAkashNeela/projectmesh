@@ -1,10 +1,10 @@
 # Projectmesh
 
-Projectmesh is a local AI engineering platform that cleanly splits responsibilities:
+Projectmesh is a local AI engineering platform that cleanly splits responsibilities to **double (~2x) your AI usage/token efficiency**:
 
-- AI clients (ChatGPT, Claude, Cursor, Copilot, etc.) can inspect your repository and write only inside `.projectmesh/` using the Model Context Protocol (MCP)
-- Local execution tools (e.g. Claude Code, Codex, Gemini) can later consume `.projectmesh` tasks and implement source code changes
-- Projectmesh exposes your local MCP server over `localhost:3334` and can tunnel it through `ngrok`
+- **Architect Mode**: AI clients (ChatGPT, Claude, Cursor, Copilot, etc.) inspect your repository and write only inside `.projectmesh/` using the Model Context Protocol (MCP) instead of constantly processing massive codebases.
+- **Executor Mode**: Local tools (e.g., Claude Code, Codex, Gemini) consume lightweight `.projectmesh` task packets to make code changes directly, reading only the affected files.
+- Projectmesh exposes your local MCP server over `localhost:3334` and can tunnel it through `ngrok`.
 
 ## Install
 
