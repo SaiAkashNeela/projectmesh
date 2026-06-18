@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
-import { createWriteStream } from 'node:fs';
+import { createWriteStream, openSync, closeSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -449,25 +449,23 @@ async function waitForDashboardServer(port = DASHBOARD_PORT) {
 }
 
 function spawnBackgroundNode(args: string[], logFile: string) {
-  const output = createWriteStream(logFile, { flags: 'a' });
+  const logFd = openSync(logFile, 'a');
   const child = spawn(process.execPath, args, {
     detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', logFd, logFd],
   });
-  child.stdout.pipe(output);
-  child.stderr.pipe(output);
+  closeSync(logFd);
   child.unref();
   return child;
 }
 
 function spawnBackgroundProcess(command: string, args: string[], logFile: string) {
-  const output = createWriteStream(logFile, { flags: 'a' });
+  const logFd = openSync(logFile, 'a');
   const child = spawn(command, args, {
     detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['ignore', logFd, logFd],
   });
-  child.stdout.pipe(output);
-  child.stderr.pipe(output);
+  closeSync(logFd);
   child.unref();
   return child;
 }
