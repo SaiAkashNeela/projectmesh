@@ -59,9 +59,10 @@ describe('share launcher helpers', () => {
     expect(getProjectmeshNgrokConfigPath('/tmp/home')).toBe('/tmp/home/.config/ngrok/ngrok.yml');
   });
 
-  test('creates a fresh stateless MCP transport for each HTTP request', async () => {
-    const connectedTransports: unknown[] = [];
-    const handledTransports: unknown[] = [];
+  test('keeps MCP workspace context isolated per session header', async () => {
+    const connectedTransports: any[] = [];
+    const seenWorkspaceSessions: string[] = [];
+    let transportCount = 0;
 
     const handler = await createMcpHttpRequestHandler({
       buildServer: async () =>
@@ -70,12 +71,30 @@ describe('share launcher helpers', () => {
             connectedTransports.push(transport);
           },
         }) as any,
-      createTransport: () =>
-        ({
-          handleRequest: async () => {
-            handledTransports.push(connectedTransports.at(-1));
+      createTransport: ({ registerSession, unregisterSession }) => {
+        const transportId = ++transportCount;
+        const transport = {
+          sessionId: undefined as string | undefined,
+          onclose: undefined as (() => void) | undefined,
+          handleRequest: async (req: any) => {
+            if (!req.headers['mcp-session-id']) {
+              transport.sessionId = `mcp-session-${transportId}`;
+              registerSession(transport.sessionId, transport);
+              return;
+            }
+            const currentSession = (await import('../src/mcp-server.js')).sessionStore.getStore()?.sessionId;
+            if (currentSession) {
+              seenWorkspaceSessions.push(currentSession);
+            }
           },
-        }) as any,
+          close: async () => {
+            if (transport.sessionId) {
+              unregisterSession(transport.sessionId);
+            }
+          },
+        };
+        return transport as any;
+      },
     });
 
     const makeResponse = () =>
@@ -85,18 +104,28 @@ describe('share launcher helpers', () => {
       }) as any;
 
     await handler(
-      { url: '/mcp', method: 'POST', headers: { host: '127.0.0.1:3334' } } as any,
+      { url: '/mcp?sessionId=chat-one', method: 'POST', headers: { host: '127.0.0.1:3334' } } as any,
       makeResponse(),
       { host: '127.0.0.1', port: MCP_HTTP_PORT },
     );
     await handler(
-      { url: '/mcp', method: 'POST', headers: { host: '127.0.0.1:3334' } } as any,
+      { url: '/mcp?sessionId=chat-two', method: 'POST', headers: { host: '127.0.0.1:3334' } } as any,
+      makeResponse(),
+      { host: '127.0.0.1', port: MCP_HTTP_PORT },
+    );
+    await handler(
+      { url: '/mcp', method: 'POST', headers: { host: '127.0.0.1:3334', 'mcp-session-id': 'mcp-session-1' } } as any,
+      makeResponse(),
+      { host: '127.0.0.1', port: MCP_HTTP_PORT },
+    );
+    await handler(
+      { url: '/mcp', method: 'POST', headers: { host: '127.0.0.1:3334', 'mcp-session-id': 'mcp-session-2' } } as any,
       makeResponse(),
       { host: '127.0.0.1', port: MCP_HTTP_PORT },
     );
 
     expect(connectedTransports).toHaveLength(2);
-    expect(handledTransports).toHaveLength(2);
     expect(connectedTransports[0]).not.toBe(connectedTransports[1]);
+    expect(seenWorkspaceSessions).toEqual(['chat-one', 'chat-two']);
   });
 });

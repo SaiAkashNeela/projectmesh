@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { createWriteStream, openSync, closeSync } from 'node:fs';
 import os from 'node:os';
@@ -80,8 +81,18 @@ interface McpHttpRequestContext {
 }
 
 interface McpHttpRequestHandlerOptions {
-  buildServer?: typeof buildMcpServer;
-  createTransport?: () => StreamableHTTPServerTransport;
+  buildServer?: () => Promise<{ connect: (transport: any) => Promise<void> | void }>;
+  createTransport?: (callbacks: {
+    registerSession: (mcpSessionId: string, transport: McpTransportLike) => void;
+    unregisterSession: (mcpSessionId: string) => void;
+  }) => McpTransportLike;
+}
+
+interface McpTransportLike {
+  sessionId?: string;
+  onclose?: (() => void) | undefined;
+  handleRequest: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  close?: () => Promise<void>;
 }
 
 export function getProjectmeshNgrokConfigPath(homeDir = os.homedir()) {
@@ -382,12 +393,38 @@ export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1
 
 export async function createMcpHttpRequestHandler(options: McpHttpRequestHandlerOptions = {}) {
   const buildServer = options.buildServer ?? buildMcpServer;
+  const sessionTransports = new Map<string, McpTransportLike>();
+  const workspaceSessionAliases = new Map<string, string>();
+
+  const registerSession = (mcpSessionId: string, transport: McpTransportLike) => {
+    sessionTransports.set(mcpSessionId, transport);
+  };
+
+  const unregisterSession = (mcpSessionId: string) => {
+    sessionTransports.delete(mcpSessionId);
+    workspaceSessionAliases.delete(mcpSessionId);
+  };
+
   const createTransport =
     options.createTransport ??
-    (() =>
-      new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-      }));
+    ((callbacks) => {
+      let transport: StreamableHTTPServerTransport;
+      transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (mcpSessionId) => {
+          callbacks.registerSession(mcpSessionId, transport);
+        },
+        onsessionclosed: (mcpSessionId) => {
+          callbacks.unregisterSession(mcpSessionId);
+        },
+      });
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          callbacks.unregisterSession(transport.sessionId);
+        }
+      };
+      return transport;
+    });
 
   return async (req: IncomingMessage, res: ServerResponse, context: McpHttpRequestContext) => {
     try {
@@ -405,22 +442,84 @@ export async function createMcpHttpRequestHandler(options: McpHttpRequestHandler
         return;
       }
 
-      let sessionId = url.searchParams.get('sessionId') || url.searchParams.get('session');
-      if (!sessionId) {
+      const headerSessionId = req.headers['mcp-session-id'];
+
+      let explicitWorkspaceSessionId = url.searchParams.get('sessionId') || url.searchParams.get('session');
+      if (!explicitWorkspaceSessionId) {
         const pathSegments = url.pathname.split('/');
         const mcpIndex = pathSegments.indexOf('mcp');
         if (mcpIndex !== -1 && pathSegments.length > mcpIndex + 1) {
-          sessionId = pathSegments[mcpIndex + 1];
+          explicitWorkspaceSessionId = pathSegments[mcpIndex + 1];
         }
       }
-      if (!sessionId) {
-        sessionId = 'default';
+
+      const workspaceSessionId =
+        (typeof headerSessionId === 'string' ? workspaceSessionAliases.get(headerSessionId) : undefined) ??
+        explicitWorkspaceSessionId ??
+        (typeof headerSessionId === 'string' ? headerSessionId : undefined) ??
+        'default';
+
+      const respondJsonError = (status: number, message: string) => {
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            error: {
+              code: -32000,
+              message,
+            },
+            id: null,
+          }),
+        );
+      };
+
+      if (req.method === 'GET' || req.method === 'DELETE') {
+        if (typeof headerSessionId !== 'string') {
+          respondJsonError(400, 'Bad Request: Mcp-Session-Id header is required');
+          return;
+        }
+
+        const transport = sessionTransports.get(headerSessionId);
+        if (!transport) {
+          respondJsonError(404, 'Session not found');
+          return;
+        }
+
+        await sessionStore.run({ sessionId: workspaceSessionId }, async () => {
+          await transport.handleRequest(req, res);
+        });
+        return;
       }
 
-      await sessionStore.run({ sessionId }, async () => {
-        const mcpServer = await buildServer();
-        const transport = createTransport();
-        await mcpServer.connect(transport);
+      if (req.method === 'POST' && typeof headerSessionId === 'string') {
+        const transport = sessionTransports.get(headerSessionId);
+        if (!transport) {
+          respondJsonError(404, 'Session not found');
+          return;
+        }
+
+        await sessionStore.run({ sessionId: workspaceSessionId }, async () => {
+          await transport.handleRequest(req, res);
+        });
+        return;
+      }
+
+      if (req.method !== 'POST') {
+        respondJsonError(405, 'Method not allowed.');
+        return;
+      }
+
+      const mcpServer = await buildServer();
+      const transport = createTransport({
+        registerSession: (mcpSessionId, activeTransport) => {
+          registerSession(mcpSessionId, activeTransport);
+          workspaceSessionAliases.set(mcpSessionId, explicitWorkspaceSessionId ?? mcpSessionId);
+        },
+        unregisterSession,
+      });
+
+      await sessionStore.run({ sessionId: workspaceSessionId }, async () => {
+        await mcpServer.connect(transport as any);
         await transport.handleRequest(req, res);
       });
     } catch (error) {
