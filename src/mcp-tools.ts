@@ -58,11 +58,11 @@ export function createPlatformApi(workspace: Workspace) {
     completeTask(input: Parameters<typeof completeTask>[1]) {
       return completeTask(workspace, input);
     },
-    async generateTaskPacket() {
-      return generateTaskPacket(workspace);
+    async generateTaskPacket(input?: { taskId?: string }) {
+      return generateTaskPacket(workspace, input?.taskId);
     },
-    async requestExecution(input: { executorId: string }) {
-      return createPendingExecution(workspace, input.executorId);
+    async requestExecution(input: { executorId: string; taskId?: string }) {
+      return createPendingExecution(workspace, input.executorId, input.taskId);
     },
     createReview(input: Parameters<typeof createReview>[1]) {
       return createReview(workspace, input);

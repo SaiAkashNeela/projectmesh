@@ -100,8 +100,9 @@ export async function buildMcpServer() {
   server.registerTool(
     'create_task',
     {
-      description: 'Create or replace `.projectmesh/tasks/active.md` for the active repository.',
+      description: 'Create a new task under `.projectmesh/tasks/`.',
       inputSchema: z.object({
+        id: z.string().optional().describe('Optional unique task ID (e.g. task-001). If not provided, one will be generated automatically.'),
         objective: z.string(),
         background: z.string(),
         requirements: z.array(z.string()),
@@ -128,8 +129,9 @@ export async function buildMcpServer() {
   server.registerTool(
     'update_task',
     {
-      description: 'Update `.projectmesh/tasks/active.md` for the active repository.',
+      description: 'Update a task under `.projectmesh/tasks/`.',
       inputSchema: z.object({
+        id: z.string().optional().describe('The ID of the task to update (e.g. task-001). If not provided, updates the default active task.'),
         objective: z.string(),
         background: z.string(),
         requirements: z.array(z.string()),
@@ -156,8 +158,12 @@ export async function buildMcpServer() {
   server.registerTool(
     'complete_task',
     {
-      description: 'Archive the active task into `.projectmesh/tasks/completed/`.',
-      inputSchema: z.object({ summary: z.string(), finalStatus: z.string() }),
+      description: 'Archive a task into `.projectmesh/tasks/completed/`.',
+      inputSchema: z.object({
+        id: z.string().optional().describe('The ID of the task to complete (e.g. task-001). If not provided, completes the default active task.'),
+        summary: z.string(),
+        finalStatus: z.string()
+      }),
     },
     async (input) => ({ content: [{ type: 'text', text: await api.completeTask(input) }] }),
   );
@@ -165,11 +171,13 @@ export async function buildMcpServer() {
   server.registerTool(
     'get_task_packet',
     {
-      description: 'Generate and retrieve the self-contained task packet containing the active task description, repo architecture, coding style, architectural decisions, and the content of all affected source files.',
-      inputSchema: z.object({}),
+      description: 'Generate and retrieve the self-contained task packet containing the task description, repo architecture, coding style, architectural decisions, and the content of all affected source files.',
+      inputSchema: z.object({
+        taskId: z.string().optional().describe('The ID of the task to generate packet for (e.g. task-001). If not provided, generates packet for default active task.')
+      }),
     },
-    async () => {
-      const result = await api.generateTaskPacket();
+    async (input) => {
+      const result = await api.generateTaskPacket(input);
       return {
         content: [
           {
@@ -184,13 +192,14 @@ export async function buildMcpServer() {
   server.registerTool(
     'execute_task_agent',
     {
-      description: 'Request execution of the active task by a local agent (e.g., claude, gemini, codex, custom). This will register a pending execution request which you must review and approve in your terminal by running `projectmesh execute`.',
+      description: 'Request execution of a task by a local agent (e.g., claude, gemini, codex, custom). This will register a pending execution request which you must review and approve in your terminal by running `projectmesh execute`.',
       inputSchema: z.object({
         executorId: z.string().describe("The ID of the executor agent (e.g. 'claude', 'gemini', 'codex', 'custom')"),
+        taskId: z.string().optional().describe("The ID of the task to execute (e.g. 'task-001'). If not provided, it defaults to the active task."),
       }),
     },
-    async ({ executorId }) => {
-      const pendingPath = await api.requestExecution({ executorId });
+    async ({ executorId, taskId }) => {
+      const pendingPath = await api.requestExecution({ executorId, taskId });
       return {
         content: [
           {

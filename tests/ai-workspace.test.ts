@@ -137,11 +137,11 @@ describe('projectmesh workspace document flows', () => {
       implementationPlan: [],
       acceptanceCriteria: [],
       risks: [],
-      status: 'active',
+      status: 'backlog',
     };
 
     const pathCreated = await createTask(workspace, taskInput);
-    expect(pathCreated).toContain('.projectmesh/tasks/active.md');
+    expect(pathCreated).toContain('.projectmesh/tasks/task-001.md');
     expect(writeCalls).toBe(3);
 
     const content = await readFile(pathCreated, 'utf8');
@@ -185,7 +185,7 @@ describe('projectmesh workspace document flows', () => {
     const originalRead = workspace.readTextFile;
     workspace.readTextFile = async (relativePath) => {
       readCalls++;
-      if (relativePath === '.projectmesh/tasks/active.md') {
+      if (relativePath.includes('task-') && relativePath.endsWith('.md')) {
         if (readCalls < 3) {
           return 'corrupted content';
         }
@@ -205,7 +205,7 @@ describe('projectmesh workspace document flows', () => {
     };
 
     const pathCreated = await createTask(workspace, taskInput);
-    expect(pathCreated).toContain('.projectmesh/tasks/active.md');
+    expect(pathCreated).toContain('.projectmesh/tasks/task-001.md');
     expect(readCalls).toBeGreaterThanOrEqual(3);
 
     const content = await readFile(pathCreated, 'utf8');

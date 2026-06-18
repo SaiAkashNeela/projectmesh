@@ -13,6 +13,7 @@ import {
   writeExecutionState,
   readExecutionState,
   clearExecutionState,
+  findTasksByStatus,
 } from './ai-workspace.js';
 import { getRunner, SUPPORTED_RUNNERS } from './agent-runners.js';
 import { DASHBOARD_PORT, startDashboardServer } from './dashboard.js';
@@ -227,17 +228,48 @@ export async function runCli(argv: string[]) {
       const args = rest.filter((arg) => !arg.startsWith('-'));
       const skipConfirm = flags.includes('--yes') || flags.includes('-y');
 
-      let executorId = args[0] || 'claude';
+      // Parse taskId from flags or arguments
+      let taskId: string | undefined = undefined;
+      const taskFlagIndex = rest.findIndex(arg => arg === '--task' || arg.startsWith('--task='));
+      if (taskFlagIndex !== -1) {
+        const flag = rest[taskFlagIndex];
+        if (flag.startsWith('--task=')) {
+          taskId = flag.split('=')[1];
+        } else if (taskFlagIndex + 1 < rest.length) {
+          taskId = rest[taskFlagIndex + 1];
+        }
+      }
+
+      const executorIds = ['claude', 'codex', 'gemini', 'opencode', 'grok', 'custom'];
+      let executorId = 'claude';
+      if (args.length > 0) {
+        const firstArg = args[0].toLowerCase();
+        if (executorIds.includes(firstArg)) {
+          executorId = firstArg;
+          if (args[1] && !taskId) {
+            taskId = args[1];
+          }
+        } else if (firstArg.startsWith('task-') || firstArg === 'active') {
+          if (!taskId) {
+            taskId = args[0];
+          }
+        } else {
+          executorId = args[0];
+        }
+      }
+
       let resolvedCommand = '';
       let runner = null;
+      let actualTaskId: string | undefined = undefined;
 
       // Check if there is a pending request first if no executorId was explicitly passed
       const pending = await getPendingExecution(workspace);
 
-      if (args.length === 0 && pending) {
+      if (args.length === 0 && !taskId && pending) {
         executorId = pending.executorId;
         resolvedCommand = pending.command;
         runner = getRunner(executorId);
+        actualTaskId = pending.taskId;
 
         if (!skipConfirm) {
           const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -265,10 +297,38 @@ export async function runCli(argv: string[]) {
         }
 
         // Generate the packet (or ensure it exists)
-        const packet = await generateTaskPacket(workspace);
+        const packet = await generateTaskPacket(workspace, taskId);
         const relativePacketPath = path.relative(workspace.root, packet.filePath);
 
-        const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+        actualTaskId = taskId;
+        if (!actualTaskId) {
+          let activeExists = false;
+          try {
+            const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+            if (!activeContent.includes('No active task.')) {
+              activeExists = true;
+            }
+          } catch {}
+          
+          if (activeExists) {
+            actualTaskId = 'active';
+          } else {
+            const activeTasks = await findTasksByStatus(workspace, 'active');
+            if (activeTasks.length > 0) {
+              actualTaskId = activeTasks[0].id;
+            }
+          }
+        }
+
+        if (!actualTaskId) {
+          throw new Error('No active task found to execute.');
+        }
+
+        const taskFilePath = actualTaskId === 'active'
+          ? '.projectmesh/tasks/active.md'
+          : `.projectmesh/tasks/${actualTaskId}.md`;
+
+        const activeTaskContent = await workspace.readTextFile(taskFilePath);
         const objectiveMatch = activeTaskContent.match(/## Objective\r?\n([^\n]+)/);
         const objective = objectiveMatch ? objectiveMatch[1].trim() : 'Active Task';
 
@@ -307,7 +367,11 @@ export async function runCli(argv: string[]) {
 
       let hasFiles = false;
       try {
-        const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+        const taskFilePath = actualTaskId === 'active'
+          ? '.projectmesh/tasks/active.md'
+          : `.projectmesh/tasks/${actualTaskId}.md`;
+
+        const activeTaskContent = await workspace.readTextFile(taskFilePath);
         const lines = activeTaskContent.split(/\r?\n/);
         let inSection = false;
         for (const line of lines) {

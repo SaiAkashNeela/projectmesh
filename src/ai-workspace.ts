@@ -1,4 +1,4 @@
-import { mkdir, stat } from 'node:fs/promises';
+import { mkdir, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AgentExecutor, AnalysisResult, CompleteTaskInput, PendingExecutionRequest, ReviewInput, TaskInput, ExecutionState } from './types.js';
@@ -49,8 +49,88 @@ export async function ensureProjectmeshWorkspace(workspace: Workspace) {
   }
 }
 
+export async function getNextTaskId(workspace: Workspace): Promise<string> {
+  const tasksDir = path.join(workspace.root, '.projectmesh/tasks');
+  try {
+    const files = await readdir(tasksDir);
+    let maxNum = 0;
+    for (const file of files) {
+      const match = file.match(/^task-(\d+)\.md$/);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNum) {
+          maxNum = num;
+        }
+      }
+    }
+    const nextNum = maxNum + 1;
+    return `task-${String(nextNum).padStart(3, '0')}`;
+  } catch {
+    return 'task-001';
+  }
+}
+
+export interface TaskSummaryInfo {
+  id: string;
+  filePath: string;
+  status: string;
+  objective: string;
+}
+
+export async function listAllTasks(workspace: Workspace): Promise<TaskSummaryInfo[]> {
+  const tasksDir = path.join(workspace.root, '.projectmesh/tasks');
+  const results: TaskSummaryInfo[] = [];
+
+  try {
+    const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+    if (!activeContent.includes('No active task.')) {
+      const statusMatch = activeContent.match(/## Status\r?\n([^\n]+)/);
+      const objectiveMatch = activeContent.match(/## Objective\r?\n([^\n]+)/);
+      results.push({
+        id: 'active',
+        filePath: '.projectmesh/tasks/active.md',
+        status: statusMatch ? statusMatch[1].trim() : 'active',
+        objective: objectiveMatch ? objectiveMatch[1].trim() : 'Active Task',
+      });
+    }
+  } catch {}
+
+  try {
+    const files = await readdir(tasksDir);
+    for (const file of files) {
+      const match = file.match(/^(task-\d+)\.md$/);
+      if (match) {
+        const id = match[1];
+        const filePath = `.projectmesh/tasks/${file}`;
+        try {
+          const content = await workspace.readTextFile(filePath);
+          const statusMatch = content.match(/## Status\r?\n([^\n]+)/);
+          const objectiveMatch = content.match(/## Objective\r?\n([^\n]+)/);
+          results.push({
+            id,
+            filePath,
+            status: statusMatch ? statusMatch[1].trim() : 'unknown',
+            objective: objectiveMatch ? objectiveMatch[1].trim() : 'Untitled Task',
+          });
+        } catch {}
+      }
+    }
+  } catch {}
+
+  return results;
+}
+
+export async function findTasksByStatus(workspace: Workspace, status: string): Promise<TaskSummaryInfo[]> {
+  const all = await listAllTasks(workspace);
+  return all.filter(t => t.status.toLowerCase() === status.toLowerCase() && t.id !== 'active');
+}
+
 export async function createTask(workspace: Workspace, input: TaskInput) {
   await ensureProjectmeshWorkspace(workspace);
+  
+  const taskId = input.id ?? (await getNextTaskId(workspace));
+  const taskRelativePath = `.projectmesh/tasks/${taskId}.md`;
+
   const markdown = [
     '# Active Task',
     '',
@@ -82,18 +162,28 @@ export async function createTask(workspace: Workspace, input: TaskInput) {
 
   const maxAttempts = 3;
   let lastError: Error | null = null;
+  let finalFilePath = '';
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const filePath = await workspace.writeProjectmeshTextFile('.projectmesh/tasks/active.md', markdown);
+      finalFilePath = await workspace.writeProjectmeshTextFile(taskRelativePath, markdown);
       
       // Confirm creation by reading the file back and checking if content matches
-      const content = await workspace.readTextFile('.projectmesh/tasks/active.md');
+      const content = await workspace.readTextFile(taskRelativePath);
       if (content === markdown) {
-        return filePath;
+        if (input.status.toLowerCase() === 'active') {
+          await workspace.writeProjectmeshTextFile('.projectmesh/tasks/active.md', markdown);
+          
+          // Verify active.md
+          const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+          if (activeContent !== markdown) {
+            throw new Error('Verification failed: active.md content did not match expected task markdown');
+          }
+        }
+        return finalFilePath;
       }
       
-      throw new Error('Verification failed: written content did not match expected task markdown');
+      throw new Error(`Verification failed: ${taskId}.md content did not match expected task markdown`);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
     }
@@ -102,19 +192,71 @@ export async function createTask(workspace: Workspace, input: TaskInput) {
   throw new Error(`Failed to create task after 3 attempts. The task was not sent. Last error: ${lastError?.message}`);
 }
 
-export async function completeTask(workspace: Workspace, input: CompleteTaskInput) {
+export async function completeTask(workspace: Workspace, input: CompleteTaskInput & { id?: string }) {
   await ensureProjectmeshWorkspace(workspace);
-  const activeRelative = '.projectmesh/tasks/active.md';
-  const current = await workspace.readTextFile(activeRelative);
+  
+  let actualTaskId = input.id;
+  if (!actualTaskId) {
+    let activeExists = false;
+    try {
+      const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+      if (!activeContent.includes('No active task.')) {
+        activeExists = true;
+      }
+    } catch {}
+
+    if (activeExists) {
+      actualTaskId = 'active';
+    } else {
+      const activeTasks = await findTasksByStatus(workspace, 'active');
+      if (activeTasks.length > 0) {
+        actualTaskId = activeTasks[0].id;
+      }
+    }
+  }
+
+  if (!actualTaskId) {
+    throw new Error('No active task found to complete.');
+  }
+
+  const taskFilePath = actualTaskId === 'active'
+    ? '.projectmesh/tasks/active.md'
+    : `.projectmesh/tasks/${actualTaskId}.md`;
+
+  const current = await workspace.readTextFile(taskFilePath);
   const archivedName = `${new Date().toISOString().replace(/[:.]/g, '-')}-${slugify(input.summary)}.md`;
   const archivedRelative = `.projectmesh/tasks/completed/${archivedName}`;
   const archivedAbsolute = workspace.resolveProjectmeshWritePath(archivedRelative);
-  const archivedText = `${current}\n## Completion Summary\n${input.summary}\n\n## Final Status\n${input.finalStatus}\n`;
+  
+  // Replace the Status header with finalStatus
+  const updatedCurrent = current.replace(/## Status\r?\n[^\n]+/g, `## Status\n${input.finalStatus}`);
+  
+  const archivedText = `${updatedCurrent}\n## Completion Summary\n${input.summary}\n\n## Final Status\n${input.finalStatus}\n`;
   await workspace.writeProjectmeshTextFile(archivedRelative, archivedText);
-  await workspace.writeProjectmeshTextFile(
-    activeRelative,
-    '# Active Task\n\nNo active task. The previous task was archived in `.projectmesh/tasks/completed/`.\n',
-  );
+
+  if (actualTaskId === 'active') {
+    await workspace.writeProjectmeshTextFile(
+      '.projectmesh/tasks/active.md',
+      '# Active Task\n\nNo active task. The previous task was archived in `.projectmesh/tasks/completed/`.\n',
+    );
+  } else {
+    // Update the task file status to completed
+    await workspace.writeProjectmeshTextFile(taskFilePath, updatedCurrent);
+    
+    // Clear active.md if it matches the current task being completed
+    try {
+      const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+      const objectiveMatch = current.match(/## Objective\r?\n([^\n]+)/);
+      const objective = objectiveMatch ? objectiveMatch[1].trim() : '';
+      if (objective && activeContent.includes(objective)) {
+        await workspace.writeProjectmeshTextFile(
+          '.projectmesh/tasks/active.md',
+          '# Active Task\n\nNo active task. The previous task was archived in `.projectmesh/tasks/completed/`.\n',
+        );
+      }
+    } catch {}
+  }
+
   return archivedAbsolute;
 }
 
@@ -252,17 +394,46 @@ async function readProjectmeshFileSafe(workspace: Workspace, relativePath: strin
   }
 }
 
-export async function generateTaskPacket(workspace: Workspace) {
+export async function generateTaskPacket(workspace: Workspace, taskId?: string) {
   await ensureProjectmeshWorkspace(workspace);
+  
+  let actualTaskId = taskId;
+  if (!actualTaskId) {
+    let activeExists = false;
+    try {
+      const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+      if (!activeContent.includes('No active task.')) {
+        activeExists = true;
+      }
+    } catch {}
+
+    if (activeExists) {
+      actualTaskId = 'active';
+    } else {
+      const activeTasks = await findTasksByStatus(workspace, 'active');
+      if (activeTasks.length > 0) {
+        actualTaskId = activeTasks[0].id;
+      }
+    }
+  }
+
+  if (!actualTaskId) {
+    throw new Error('No active task found in .projectmesh/tasks/active.md. Cannot generate a task packet.');
+  }
+
+  const taskFilePath = actualTaskId === 'active'
+    ? '.projectmesh/tasks/active.md'
+    : `.projectmesh/tasks/${actualTaskId}.md`;
+
   let activeTaskContent = '';
   try {
-    activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+    activeTaskContent = await workspace.readTextFile(taskFilePath);
   } catch {
-    throw new Error('No active task found in .projectmesh/tasks/active.md. Cannot generate a task packet.');
+    throw new Error(`Task ${actualTaskId} not found at ${taskFilePath}. Cannot generate a task packet.`);
   }
   
   if (activeTaskContent.includes('No active task.')) {
-    throw new Error('No active task found in .projectmesh/tasks/active.md. Cannot generate a task packet.');
+    throw new Error(`No active task found in ${taskFilePath}. Cannot generate a task packet.`);
   }
 
   const affectedFiles = parseAffectedFiles(activeTaskContent);
@@ -329,14 +500,14 @@ export const SUPPORTED_EXECUTORS: AgentExecutor[] = SUPPORTED_RUNNERS.map((runne
   description: `Runs the ${runner.name}`
 }));
 
-export async function createPendingExecution(workspace: Workspace, executorId: string): Promise<string> {
+export async function createPendingExecution(workspace: Workspace, executorId: string, taskId?: string): Promise<string> {
   await ensureProjectmeshWorkspace(workspace);
   const runner = getRunner(executorId);
 
   // Ensure active task and packet exist (otherwise generate packet)
   let activePacketPath = '';
   try {
-    const packet = await generateTaskPacket(workspace);
+    const packet = await generateTaskPacket(workspace, taskId);
     activePacketPath = packet.filePath;
   } catch (error) {
     throw new Error(`Failed to initialize task packet for execution: ${error instanceof Error ? error.message : String(error)}`);
@@ -345,7 +516,35 @@ export async function createPendingExecution(workspace: Workspace, executorId: s
   const relativePacketPath = path.relative(workspace.root, activePacketPath);
   
   // Resolve the command using the runner context
-  const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+  let actualTaskId = taskId;
+  if (!actualTaskId) {
+    let activeExists = false;
+    try {
+      const activeContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+      if (!activeContent.includes('No active task.')) {
+        activeExists = true;
+      }
+    } catch {}
+    
+    if (activeExists) {
+      actualTaskId = 'active';
+    } else {
+      const activeTasks = await findTasksByStatus(workspace, 'active');
+      if (activeTasks.length > 0) {
+        actualTaskId = activeTasks[0].id;
+      }
+    }
+  }
+
+  if (!actualTaskId) {
+    throw new Error('No active task found to execute.');
+  }
+
+  const taskFilePath = actualTaskId === 'active'
+    ? '.projectmesh/tasks/active.md'
+    : `.projectmesh/tasks/${actualTaskId}.md`;
+
+  const activeTaskContent = await workspace.readTextFile(taskFilePath);
   const objectiveMatch = activeTaskContent.match(/## Objective\r?\n([^\n]+)/);
   const objective = objectiveMatch ? objectiveMatch[1].trim() : 'Active Task';
 
@@ -358,7 +557,8 @@ export async function createPendingExecution(workspace: Workspace, executorId: s
   const request: PendingExecutionRequest = {
     executorId,
     command: resolvedCommand,
-    requestedAt: nowStamp()
+    requestedAt: nowStamp(),
+    taskId: actualTaskId
   };
 
   const pendingFilePath = '.projectmesh/tasks/pending-execution.json';

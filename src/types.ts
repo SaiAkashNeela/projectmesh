@@ -12,6 +12,7 @@ export interface ReposConfig {
 }
 
 export interface TaskInput {
+  id?: string;
   objective: string;
   background: string;
   requirements: string[];
@@ -76,6 +77,7 @@ export interface PendingExecutionRequest {
   executorId: string;
   command: string;
   requestedAt: string;
+  taskId?: string;
 }
 
 export interface ExecutionState {
