@@ -58,7 +58,7 @@ export async function buildMcpServer() {
   server.registerTool(
     'list_workspaces',
     {
-      description: 'List all registered repositories/workspaces in the ProjectMesh registry.',
+      description: 'List all registered repositories/workspaces in the ProjectMesh registry. Indicates which workspace is active for the current session. Workspace selection is session-scoped.',
       inputSchema: z.object({}),
     },
     async () => {
@@ -71,7 +71,7 @@ export async function buildMcpServer() {
         id: repo.id,
         name: repo.name,
         root: repo.root,
-        active: repo.id === activeId,
+        activeForCurrentSession: repo.id === activeId,
       }));
 
       return { content: [{ type: 'text', text: JSON.stringify(workspaces, null, 2) }] };
@@ -81,7 +81,7 @@ export async function buildMcpServer() {
   server.registerTool(
     'switch_workspace',
     {
-      description: 'Switch the active workspace context for the current session.',
+      description: 'Switch the active workspace context for the current session. This selection is session-isolated and does not affect other chat sessions/connections.',
       inputSchema: z.object({
         repoId: z.string().describe('The ID of the repository/workspace to switch to.'),
       }),

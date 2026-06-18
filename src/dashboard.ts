@@ -483,7 +483,7 @@ function pageHtml() {
         el.innerHTML =
           '<header>' +
             '<div><strong>' + project.name + '</strong><div class="project-root">' + project.root + '</div></div>' +
-            (project.isActive ? '<span class="badge">Active</span>' : '') +
+            (project.isActive ? '<span class="badge">CLI Default</span>' : '') +
           '</header>' +
           '<div class="mini-stats">' +
             '<span>' + (project.hasProjectmeshWorkspace ? '.projectmesh ready' : 'No .projectmesh yet') + '</span>' +
@@ -520,7 +520,7 @@ function pageHtml() {
       settingsMeta.textContent =
         'ngrok config: ' + data.summary.ngrokConfigPath + '\\n' +
         'Global home: ' + data.summary.globalHome + '\\n' +
-        'Active project: ' + (data.summary.activeProjectName || 'None');
+        'CLI default project: ' + (data.summary.activeProjectName || 'None');
       syncText.textContent = 'Last sync: ' + new Date(data.summary.now).toLocaleTimeString() + ' • auto-refresh every 10 seconds';
     }
 
