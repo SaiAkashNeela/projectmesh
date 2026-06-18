@@ -13,7 +13,7 @@ import {
   sessionWorkspaceMap,
 } from '../src/mcp-server.js';
 import { setActiveRepo } from '../src/platform-config.js';
-import { ensureProjectmeshWorkspace, createWorkspace } from '../src/index.js';
+import { ensureProjectmeshWorkspace, createWorkspace, runCli } from '../src/index.js';
 
 async function createRepoFixture(name: string) {
   const root = await mkdtemp(path.join(os.tmpdir(), `projectmesh-reg-test-${name}-`));
@@ -75,5 +75,17 @@ describe('multi-repository workspace registry and session isolation', () => {
       const taskResult = await callTool('read_file', { path: '.projectmesh/tasks/active.md' });
       expect(taskResult.content[0].text).toContain('Hello from repo-one');
     });
+  });
+
+  test('CLI use and new commands auto-initialize workspaces if they do not exist', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'projectmesh-cli-test-'));
+    
+    // Call runCli with 'use' on uninitialized path -> should initialize it
+    const output = await runCli(['use', root]);
+    expect(output).toContain('Initialized Projectmesh workspace');
+    
+    // Call runCli with 'new' on already initialized path -> should just report active root (not re-initialize)
+    const output2 = await runCli(['new', root]);
+    expect(output2).toBe(`Active workspace: ${path.resolve(root)}`);
   });
 });

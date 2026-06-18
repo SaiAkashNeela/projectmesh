@@ -113,24 +113,41 @@ export async function runCli(argv: string[]) {
   const [command, ...rest] = argv;
 
   switch (command) {
-    case 'use': {
-      const target = rest[0];
-      if (!target) throw new Error('Missing workspace path. Usage: projectmesh use <workspace-path>');
-      const repo = await setActiveRepo(await resolveWorkspaceTarget(target));
-      return `Active workspace: ${repo.root}`;
-    }
+    case 'use':
     case 'new': {
-      const target = rest[0] ? await resolveWorkspaceTarget(rest[0]) : getDefaultWorkspaceTarget();
+      const targetArg = rest[0];
+      let target: string;
+      if (!targetArg) {
+        if (command === 'use') {
+          throw new Error('Missing workspace path. Usage: projectmesh use <workspace-path>');
+        }
+        target = getDefaultWorkspaceTarget();
+      } else {
+        target = await resolveWorkspaceTarget(targetArg);
+      }
+
       const repo = await setActiveRepo(target);
       const workspace = createWorkspace(repo.root);
-      await ensureProjectmeshWorkspace(workspace);
-      const analysis = await analyzeRepository(workspace);
-      await updateArchitectureFromAnalysis(workspace, analysis);
-      return [
-        `Active workspace: ${repo.root}`,
-        `Initialized Projectmesh workspace at ${workspace.projectmeshDir}`,
-        `Architecture written to ${workspace.projectmeshDir}/architecture.md`,
-      ].join('\n');
+
+      const { stat } = await import('node:fs/promises');
+      let hasWorkspace = false;
+      try {
+        await stat(workspace.projectmeshDir);
+        hasWorkspace = true;
+      } catch {}
+
+      if (!hasWorkspace) {
+        await ensureProjectmeshWorkspace(workspace);
+        const analysis = await analyzeRepository(workspace);
+        await updateArchitectureFromAnalysis(workspace, analysis);
+        return [
+          `Active workspace: ${repo.root}`,
+          `Initialized Projectmesh workspace at ${workspace.projectmeshDir}`,
+          `Architecture written to ${workspace.projectmeshDir}/architecture.md`,
+        ].join('\n');
+      }
+
+      return `Active workspace: ${repo.root}`;
     }
     case 'status': {
       const repo = await getActiveRepo();
