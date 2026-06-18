@@ -143,6 +143,25 @@ export async function buildMcpServer() {
   );
 
   server.registerTool(
+    'get_task_packet',
+    {
+      description: 'Generate and retrieve the self-contained task packet containing the active task description, repo architecture, coding style, architectural decisions, and the content of all affected source files.',
+      inputSchema: z.object({}),
+    },
+    async () => {
+      const result = await api.generateTaskPacket();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Task Packet generated successfully at: ${result.filePath}\n\n${result.content}`,
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
     'create_review',
     {
       description: 'Create a review document under `.projectmesh/reviews/`.',

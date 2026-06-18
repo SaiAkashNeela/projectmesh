@@ -1,5 +1,5 @@
 import { analyzeRepository } from './repository-analysis.js';
-import { ensureProjectmeshWorkspace, updateArchitectureFromAnalysis } from './ai-workspace.js';
+import { ensureProjectmeshWorkspace, generateTaskPacket, updateArchitectureFromAnalysis } from './ai-workspace.js';
 import { DASHBOARD_PORT, startDashboardServer } from './dashboard.js';
 import { getActiveRepo, readReposConfig, setActiveRepo } from './platform-config.js';
 import {
@@ -46,6 +46,7 @@ function helpText() {
     '  projectmesh start',
     '  projectmesh stop',
     '  projectmesh share',
+    '  projectmesh packet',
     '  projectmesh mcp',
     '  projectmesh mcp-http [--foreground]',
     '  projectmesh dashboard [--foreground]',
@@ -81,8 +82,27 @@ export async function runCli(argv: string[]) {
     case 'status': {
       const repo = await getActiveRepo();
       const state = await getProjectmeshServiceStatus();
+      const workspace = createWorkspace(repo.root);
+      let taskStatus = 'No active task';
+      try {
+        const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+        if (!activeTaskContent.includes('No active task.')) {
+          const objectiveMatch = activeTaskContent.match(/## Objective\r?\n([^\n]+)/);
+          const objective = objectiveMatch ? objectiveMatch[1].trim() : 'Active Task';
+
+          let packetStatus = 'Not generated';
+          try {
+            await workspace.readTextFile('.projectmesh/context/active-packet.md');
+            packetStatus = 'Generated (.projectmesh/context/active-packet.md)';
+          } catch {}
+
+          taskStatus = `Active: "${objective}"\nTask Packet: ${packetStatus}`;
+        }
+      } catch {}
+
       return [
         `Active workspace: ${repo.root}`,
+        `Task status: ${taskStatus}`,
         state
           ? `Service status: running\nChatGPT MCP URL: ${state.chatGptUrl}\nLocal MCP endpoint: http://${state.mcp.host}:${state.mcp.port}${state.mcp.path}\nDashboard URL: ${state.dashboard.url}`
           : 'Service status: stopped',
@@ -132,6 +152,17 @@ export async function runCli(argv: string[]) {
         `Dashboard URL: ${state.dashboard.url}`,
         '',
         'Stop services later with: projectmesh stop',
+      ].join('\n');
+    }
+    case 'packet': {
+      const repo = await getActiveRepo();
+      const workspace = createWorkspace(repo.root);
+      const result = await generateTaskPacket(workspace);
+      return [
+        '# Task Packet Generated',
+        `File: ${result.filePath}`,
+        '',
+        'Use this packet to feed clean, self-contained context to your AI executor agent.',
       ].join('\n');
     }
     case 'stop': {

@@ -1,3 +1,114 @@
+# TASK PACKET: Transform ProjectMesh into an AI engineering orchestration layer with architect-to-executor task handoff workflow.
+
+Generated at: 2026-06-18T14:27:41.362Z
+
+## 1. Active Task Details
+
+# Active Task
+
+## Objective
+Transform ProjectMesh into an AI engineering orchestration layer with architect-to-executor task handoff workflow.
+
+## Background
+ProjectMesh should not be positioned as only an AI memory system. The goal is to enable ChatGPT (architect) to plan, create structured engineering tasks, and have Codex (executor) implement with minimal repeated context reading. The shared .projectmesh workspace becomes the collaboration layer between AI agents.
+
+## Requirements
+- Add a clear Task Packet concept for executor handoff.
+- Create an Architect Mode and Executor Mode workflow separation where possible.
+- Generate focused context packets containing objective, relevant architecture, decisions, affected files, constraints, and acceptance criteria.
+- Improve review loop support so implementation can be reviewed and tracked.
+- Preserve the repo-native .projectmesh approach.
+- Avoid turning the project into a generic vector memory system; focus on structured engineering context and workflow.
+
+## Affected Files
+- .projectmesh/tasks
+- src
+- README.md
+- tests
+
+## Implementation Plan
+- Inspect current task, workspace, MCP, and CLI architecture.
+- Design the smallest clean abstraction for architect-generated task packets.
+- Implement executor-facing task/context generation.
+- Add or improve review workflow integration.
+- Add tests for new workflow behaviour.
+- Update documentation and examples showing ChatGPT architect -> Codex executor flow.
+
+## Acceptance Criteria
+- A developer can create a structured implementation task from an architect workflow.
+- An executor agent can consume the task without needing unnecessary repo-wide context discovery.
+- ProjectMesh clearly communicates the architect/executor workflow.
+- Tests cover the new functionality.
+- README explains the new AI collaboration workflow.
+
+## Risks
+- Avoid overengineering with unnecessary AI memory features.
+- Do not break existing MCP/task functionality.
+- Keep backwards compatibility where possible.
+
+## Status
+active
+
+
+## 2. Project Architecture & Decisions
+
+### Repository Architecture
+# Repository Architecture
+
+## Detected Frameworks
+- None
+
+## Detected Languages
+- JSON
+- Markdown
+- TypeScript
+
+## Package Manager
+bun
+
+## Database Technologies
+- None
+
+## Deployment Technologies
+- None
+
+## Major Services
+- None
+
+## Folder Structure Summary
+- dist/
+- src/
+- tests/
+
+
+### Architectural Decisions
+# Architectural Decisions
+
+
+
+### Coding Style Guide
+# Coding Style
+
+
+
+### Working Memory
+# Working Memory
+
+
+
+## 3. Affected Files Context
+
+### File: `.projectmesh/tasks`
+
+*Path is a directory.*
+
+### File: `src`
+
+*Path is a directory.*
+
+### File: `README.md`
+
+```md
 # Projectmesh
 
 Projectmesh is a local AI engineering platform that cleanly splits responsibilities:
@@ -63,30 +174,6 @@ Get your token here:
 8. Starts the Projectmesh dashboard on `http://127.0.0.1:3335`
 9. Prints the final ChatGPT-ready MCP URL
 
-## AI Handoff Workflow: Architect & Executor
-
-Projectmesh is designed as a repository-native collaboration layer that enables a structured handoff between AI agents:
-
-1. **Architect Mode (e.g., ChatGPT)**:
-   * ChatGPT connects via the Projectmesh MCP server.
-   * It inspects repository structure and writes/plans tasks inside `.projectmesh/tasks/active.md` (using the `create_task`/`update_task` tools).
-   * It documents decisions in `.projectmesh/decisions.md` and durable memory in `.projectmesh/memory.md`.
-
-2. **Handoff Generation**:
-   * Once a task is ready, the **Task Packet** is generated:
-     ```bash
-     projectmesh packet
-     ```
-     *(This can also be invoked by the architect agent using the `get_task_packet` MCP tool).*
-   * This creates a self-contained context document at `.projectmesh/context/active-packet.md` that bundles:
-     * Active task details and criteria.
-     * High-level repository architecture, decisions, and style guide.
-     * The actual source code of all files listed under `Affected Files` (safely truncated if files are too large or binary).
-
-3. **Executor Mode (e.g., Codex / Antigravity / Cursor)**:
-   * The executor agent consumes the self-contained `.projectmesh/context/active-packet.md` directly.
-   * It implements the source code changes in the repository with complete context, without needing to perform extensive, redundant scans of the entire workspace.
-
 ## Commands
 
 Main CLI:
@@ -101,7 +188,6 @@ projectmesh setup /absolute/path/to/repo
 projectmesh start
 projectmesh stop
 projectmesh share
-projectmesh packet
 projectmesh mcp-http
 projectmesh dashboard
 projectmesh ngrok config
@@ -206,3 +292,10 @@ bun run build
 - `src/git.ts`: fixed-argument git readers with no shell execution
 - `src/mcp-server.ts`: stdio MCP server for local MCP hosts
 - `src/share.ts`: localhost HTTP MCP server, ngrok install flow, and background service management
+
+```
+
+### File: `tests`
+
+*Path is a directory.*
+

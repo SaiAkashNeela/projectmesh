@@ -4,6 +4,7 @@ import {
   createReview,
   createTask,
   ensureProjectmeshWorkspace,
+  generateTaskPacket,
   updateArchitecture,
   updateArchitectureFromAnalysis,
   updateDecision,
@@ -55,6 +56,9 @@ export function createPlatformApi(workspace: Workspace) {
     },
     completeTask(input: Parameters<typeof completeTask>[1]) {
       return completeTask(workspace, input);
+    },
+    async generateTaskPacket() {
+      return generateTaskPacket(workspace);
     },
     createReview(input: Parameters<typeof createReview>[1]) {
       return createReview(workspace, input);
