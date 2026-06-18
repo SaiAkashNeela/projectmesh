@@ -4,6 +4,7 @@ import {
   MCP_HTTP_PATH,
   MCP_HTTP_PORT,
   buildChatGptMcpUrl,
+  createMcpHttpRequestHandler,
   getProjectmeshServiceStatePath,
   getProjectmeshNgrokConfigPath,
   getNgrokInstallHint,
@@ -56,5 +57,46 @@ describe('share launcher helpers', () => {
 
   test('resolves the ngrok config path under the user home directory', () => {
     expect(getProjectmeshNgrokConfigPath('/tmp/home')).toBe('/tmp/home/.config/ngrok/ngrok.yml');
+  });
+
+  test('creates a fresh stateless MCP transport for each HTTP request', async () => {
+    const connectedTransports: unknown[] = [];
+    const handledTransports: unknown[] = [];
+
+    const handler = await createMcpHttpRequestHandler({
+      buildServer: async () =>
+        ({
+          connect: async (transport: unknown) => {
+            connectedTransports.push(transport);
+          },
+        }) as any,
+      createTransport: () =>
+        ({
+          handleRequest: async () => {
+            handledTransports.push(connectedTransports.at(-1));
+          },
+        }) as any,
+    });
+
+    const makeResponse = () =>
+      ({
+        writeHead: () => undefined,
+        end: () => undefined,
+      }) as any;
+
+    await handler(
+      { url: '/mcp', method: 'POST', headers: { host: '127.0.0.1:3334' } } as any,
+      makeResponse(),
+      { host: '127.0.0.1', port: MCP_HTTP_PORT },
+    );
+    await handler(
+      { url: '/mcp', method: 'POST', headers: { host: '127.0.0.1:3334' } } as any,
+      makeResponse(),
+      { host: '127.0.0.1', port: MCP_HTTP_PORT },
+    );
+
+    expect(connectedTransports).toHaveLength(2);
+    expect(handledTransports).toHaveLength(2);
+    expect(connectedTransports[0]).not.toBe(connectedTransports[1]);
   });
 });

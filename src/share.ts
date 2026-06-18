@@ -74,6 +74,16 @@ export interface ProjectmeshServiceState {
   chatGptUrl: string;
 }
 
+interface McpHttpRequestContext {
+  host: string;
+  port: number;
+}
+
+interface McpHttpRequestHandlerOptions {
+  buildServer?: typeof buildMcpServer;
+  createTransport?: () => StreamableHTTPServerTransport;
+}
+
 export function getProjectmeshNgrokConfigPath(homeDir = os.homedir()) {
   return path.join(homeDir, '.config', 'ngrok', 'ngrok.yml');
 }
@@ -349,19 +359,43 @@ function isPidAlive(pid: number) {
 }
 
 export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1') {
-  const mcpServer = await buildMcpServer();
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  });
-  await mcpServer.connect(transport);
+  const handleMcpRequest = await createMcpHttpRequestHandler();
+  const httpServer = createServer((req: IncomingMessage, res: ServerResponse) =>
+    handleMcpRequest(req, res, { host, port }),
+  );
 
-  const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, host, () => resolve());
+  });
+
+  return {
+    port,
+    host,
+    path: MCP_HTTP_PATH,
+    close: () =>
+      new Promise<void>((resolve, reject) => {
+        httpServer.close((error) => (error ? reject(error) : resolve()));
+      }),
+  };
+}
+
+export async function createMcpHttpRequestHandler(options: McpHttpRequestHandlerOptions = {}) {
+  const buildServer = options.buildServer ?? buildMcpServer;
+  const createTransport =
+    options.createTransport ??
+    (() =>
+      new StreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+      }));
+
+  return async (req: IncomingMessage, res: ServerResponse, context: McpHttpRequestContext) => {
     try {
-      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${host}:${port}`}`);
+      const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${context.host}:${context.port}`}`);
 
       if (url.pathname === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ ok: true, port, path: MCP_HTTP_PATH }));
+        res.end(JSON.stringify({ ok: true, port: context.port, path: MCP_HTTP_PATH }));
         return;
       }
 
@@ -384,27 +418,15 @@ export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1
       }
 
       await sessionStore.run({ sessionId }, async () => {
+        const mcpServer = await buildServer();
+        const transport = createTransport();
+        await mcpServer.connect(transport);
         await transport.handleRequest(req, res);
       });
     } catch (error) {
       res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
       res.end(error instanceof Error ? error.message : String(error));
     }
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once('error', reject);
-    httpServer.listen(port, host, () => resolve());
-  });
-
-  return {
-    port,
-    host,
-    path: MCP_HTTP_PATH,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => (error ? reject(error) : resolve()));
-      }),
   };
 }
 
