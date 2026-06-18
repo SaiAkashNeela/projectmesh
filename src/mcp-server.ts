@@ -112,7 +112,17 @@ export async function buildMcpServer() {
         status: z.string(),
       }),
     },
-    async (input) => ({ content: [{ type: 'text', text: await api.createTask(input) }] }),
+    async (input) => {
+      try {
+        const text = await api.createTask(input);
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+          isError: true,
+        };
+      }
+    },
   );
 
   server.registerTool(
@@ -130,7 +140,17 @@ export async function buildMcpServer() {
         status: z.string(),
       }),
     },
-    async (input) => ({ content: [{ type: 'text', text: await api.updateTask(input) }] }),
+    async (input) => {
+      try {
+        const text = await api.updateTask(input);
+        return { content: [{ type: 'text', text }] };
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
+          isError: true,
+        };
+      }
+    },
   );
 
   server.registerTool(

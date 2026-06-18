@@ -1,8 +1,9 @@
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
-import type { AgentExecutor, AnalysisResult, CompleteTaskInput, PendingExecutionRequest, ReviewInput, TaskInput } from './types.js';
+import type { AgentExecutor, AnalysisResult, CompleteTaskInput, PendingExecutionRequest, ReviewInput, TaskInput, ExecutionState } from './types.js';
 import type { Workspace } from './workspace.js';
+import { getRunner, SUPPORTED_RUNNERS } from './agent-runners.js';
 
 function nowStamp() {
   return new Date().toISOString();
@@ -79,7 +80,26 @@ export async function createTask(workspace: Workspace, input: TaskInput) {
     '',
   ].join('\n');
 
-  return workspace.writeProjectmeshTextFile('.projectmesh/tasks/active.md', markdown);
+  const maxAttempts = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const filePath = await workspace.writeProjectmeshTextFile('.projectmesh/tasks/active.md', markdown);
+      
+      // Confirm creation by reading the file back and checking if content matches
+      const content = await workspace.readTextFile('.projectmesh/tasks/active.md');
+      if (content === markdown) {
+        return filePath;
+      }
+      
+      throw new Error('Verification failed: written content did not match expected task markdown');
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+
+  throw new Error(`Failed to create task after 3 attempts. The task was not sent. Last error: ${lastError?.message}`);
 }
 
 export async function completeTask(workspace: Workspace, input: CompleteTaskInput) {
@@ -302,39 +322,16 @@ export async function generateTaskPacket(workspace: Workspace) {
   return { filePath, content: markdown };
 }
 
-export const SUPPORTED_EXECUTORS: AgentExecutor[] = [
-  {
-    id: 'claude',
-    name: 'Claude Code',
-    command: 'claude {packetPath}',
-    description: 'Runs Claude Code CLI passing the active task packet.'
-  },
-  {
-    id: 'gemini',
-    name: 'Gemini CLI',
-    command: 'gemini-cli {packetPath}',
-    description: 'Runs Gemini CLI on the active task packet.'
-  },
-  {
-    id: 'codex',
-    name: 'Codex CLI',
-    command: 'codex-cli --task {packetPath}',
-    description: 'Runs Codex CLI on the active task packet.'
-  },
-  {
-    id: 'custom',
-    name: 'Custom Script',
-    command: 'sh .projectmesh/execute.sh {packetPath}',
-    description: 'Runs a custom project-specific execution script.'
-  }
-];
+export const SUPPORTED_EXECUTORS: AgentExecutor[] = SUPPORTED_RUNNERS.map((runner) => ({
+  id: runner.id,
+  name: runner.name,
+  command: runner.commandName,
+  description: `Runs the ${runner.name}`
+}));
 
 export async function createPendingExecution(workspace: Workspace, executorId: string): Promise<string> {
   await ensureProjectmeshWorkspace(workspace);
-  const executor = SUPPORTED_EXECUTORS.find((e) => e.id === executorId);
-  if (!executor) {
-    throw new Error(`Unsupported executor ID: ${executorId}`);
-  }
+  const runner = getRunner(executorId);
 
   // Ensure active task and packet exist (otherwise generate packet)
   let activePacketPath = '';
@@ -346,7 +343,17 @@ export async function createPendingExecution(workspace: Workspace, executorId: s
   }
 
   const relativePacketPath = path.relative(workspace.root, activePacketPath);
-  const resolvedCommand = executor.command.replace('{packetPath}', relativePacketPath);
+  
+  // Resolve the command using the runner context
+  const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+  const objectiveMatch = activeTaskContent.match(/## Objective\r?\n([^\n]+)/);
+  const objective = objectiveMatch ? objectiveMatch[1].trim() : 'Active Task';
+
+  const resolvedCommand = runner.buildCommand({
+    objective,
+    packetPath: relativePacketPath,
+    workspaceRoot: workspace.root
+  });
 
   const request: PendingExecutionRequest = {
     executorId,
@@ -357,6 +364,30 @@ export async function createPendingExecution(workspace: Workspace, executorId: s
   const pendingFilePath = '.projectmesh/tasks/pending-execution.json';
   await workspace.writeProjectmeshTextFile(pendingFilePath, JSON.stringify(request, null, 2));
   return workspace.resolveProjectmeshWritePath(pendingFilePath);
+}
+
+export async function writeExecutionState(workspace: Workspace, state: ExecutionState): Promise<string> {
+  await ensureProjectmeshWorkspace(workspace);
+  const filePath = '.projectmesh/tasks/execution-state.json';
+  await workspace.writeProjectmeshTextFile(filePath, JSON.stringify(state, null, 2));
+  return workspace.resolveProjectmeshWritePath(filePath);
+}
+
+export async function readExecutionState(workspace: Workspace): Promise<ExecutionState | null> {
+  try {
+    const content = await workspace.readTextFile('.projectmesh/tasks/execution-state.json');
+    return JSON.parse(content) as ExecutionState;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearExecutionState(workspace: Workspace): Promise<void> {
+  const filePath = workspace.resolveProjectmeshWritePath('.projectmesh/tasks/execution-state.json');
+  try {
+    const { unlink } = await import('node:fs/promises');
+    await unlink(filePath);
+  } catch {}
 }
 
 export async function getPendingExecution(workspace: Workspace): Promise<PendingExecutionRequest | null> {

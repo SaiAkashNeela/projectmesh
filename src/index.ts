@@ -1,4 +1,5 @@
 export * from './ai-workspace.js';
+export * from './agent-runners.js';
 export * from './cli.js';
 export * from './dashboard.js';
 export * from './errors.js';

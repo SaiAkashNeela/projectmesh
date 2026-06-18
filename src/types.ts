@@ -77,3 +77,12 @@ export interface PendingExecutionRequest {
   command: string;
   requestedAt: string;
 }
+
+export interface ExecutionState {
+  executorId: string;
+  command: string;
+  status: 'running' | 'completed' | 'failed';
+  startedAt: string;
+  finishedAt?: string;
+  exitCode?: number;
+}

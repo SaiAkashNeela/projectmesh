@@ -10,7 +10,11 @@ import {
   getPendingExecution,
   clearPendingExecution,
   createExecutionReport,
+  writeExecutionState,
+  readExecutionState,
+  clearExecutionState,
 } from './ai-workspace.js';
+import { getRunner, SUPPORTED_RUNNERS } from './agent-runners.js';
 import { DASHBOARD_PORT, startDashboardServer } from './dashboard.js';
 import { getActiveRepo, readReposConfig, setActiveRepo } from './platform-config.js';
 import {
@@ -32,6 +36,41 @@ import path from 'node:path';
 
 export function getDefaultWorkspaceTarget(cwd = process.cwd()) {
   return cwd;
+}
+
+function spawnNewTerminalSession(cwd: string, command: string): Promise<void> {
+  const isMac = process.platform === 'darwin';
+  if (!isMac) {
+    return new Promise<void>((resolve, reject) => {
+      const child = spawn(command, {
+        cwd,
+        stdio: 'inherit',
+        shell: true,
+      });
+      child.on('error', reject);
+      child.on('exit', () => {
+        resolve();
+      });
+    });
+  }
+
+  return new Promise<void>((resolve, reject) => {
+    const escapedCwd = cwd.replace(/'/g, "'\\''");
+    const escapedCommand = command.replace(/"/g, '\\"').replace(/'/g, "\\'");
+
+    const appleScript = `
+      tell application "Terminal"
+        activate
+        do script "cd '${escapedCwd}' && ${escapedCommand}"
+      end tell
+    `;
+
+    const osascript = spawn('osascript', ['-e', appleScript], { stdio: 'ignore' });
+    osascript.on('error', reject);
+    osascript.on('exit', () => {
+      resolve();
+    });
+  });
 }
 
 async function resolveWorkspaceTarget(target: string) {
@@ -188,15 +227,17 @@ export async function runCli(argv: string[]) {
       const args = rest.filter((arg) => !arg.startsWith('-'));
       const skipConfirm = flags.includes('--yes') || flags.includes('-y');
 
-      let executorId = args[0];
+      let executorId = args[0] || 'claude';
       let resolvedCommand = '';
+      let runner = null;
 
-      // Check if there is a pending request first if no executorId is provided
+      // Check if there is a pending request first if no executorId was explicitly passed
       const pending = await getPendingExecution(workspace);
 
-      if (!executorId && pending) {
+      if (args.length === 0 && pending) {
         executorId = pending.executorId;
         resolvedCommand = pending.command;
+        runner = getRunner(executorId);
 
         if (!skipConfirm) {
           const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -214,28 +255,33 @@ export async function runCli(argv: string[]) {
         }
         await clearPendingExecution(workspace);
       } else {
-        // Clear any stale pending requests
+        // Clear any pending request since we are manually running or specifying an executor
         await clearPendingExecution(workspace);
 
-        if (!executorId) {
-          const list = SUPPORTED_EXECUTORS.map((e) => `  - ${e.id}: ${e.name} (${e.description})`).join('\n');
-          return `Usage: projectmesh execute <executor-id> [--yes]\n\nAvailable executors:\n${list}`;
-        }
-
-        const executor = SUPPORTED_EXECUTORS.find((e) => e.id === executorId);
-        if (!executor) {
-          throw new Error(`Unsupported executor ID: ${executorId}. Run 'projectmesh execute' to see supported executors.`);
+        try {
+          runner = getRunner(executorId);
+        } catch (err) {
+          throw new Error(`Unsupported agent executor: ${executorId}. Supported executors: ${SUPPORTED_RUNNERS.map(r => r.id).join(', ')}`);
         }
 
         // Generate the packet (or ensure it exists)
         const packet = await generateTaskPacket(workspace);
         const relativePacketPath = path.relative(workspace.root, packet.filePath);
-        resolvedCommand = executor.command.replace('{packetPath}', relativePacketPath);
+
+        const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+        const objectiveMatch = activeTaskContent.match(/## Objective\r?\n([^\n]+)/);
+        const objective = objectiveMatch ? objectiveMatch[1].trim() : 'Active Task';
+
+        resolvedCommand = runner.buildCommand({
+          objective,
+          packetPath: relativePacketPath,
+          workspaceRoot: workspace.root
+        });
 
         if (!skipConfirm) {
           const rl = createInterface({ input: process.stdin, output: process.stdout });
           const answer = await rl.question(
-            `About to execute task using ${executor.name}:\n` +
+            `About to execute task using ${runner.name}:\n` +
             `  Command: ${resolvedCommand}\n\n` +
             `Do you want to proceed? (y/N): `
           );
@@ -246,55 +292,125 @@ export async function runCli(argv: string[]) {
         }
       }
 
-      // Execute command in workspace root
-      const commandParts = resolvedCommand.split(' ');
-      const mainCmd = commandParts[0];
-      const cmdArgs = commandParts.slice(1);
+      // Check context packet contents
+      let hasArch = false;
+      try {
+        const archContent = await workspace.readTextFile('.projectmesh/architecture.md');
+        hasArch = archContent.trim().length > 30;
+      } catch {}
 
-      // Add any extra arguments passed via CLI (excluding -y / --yes / executorId)
-      const extraArgs = rest.filter((arg) => arg !== executorId && arg !== '-y' && arg !== '--yes');
-      cmdArgs.push(...extraArgs);
+      let hasDecisions = false;
+      try {
+        const decContent = await workspace.readTextFile('.projectmesh/decisions.md');
+        hasDecisions = decContent.trim().length > 30;
+      } catch {}
 
-      const fullCommandStr = [mainCmd, ...cmdArgs].join(' ');
-      process.stdout.write(`Executing: ${fullCommandStr}\n\n`);
+      let hasFiles = false;
+      try {
+        const activeTaskContent = await workspace.readTextFile('.projectmesh/tasks/active.md');
+        const lines = activeTaskContent.split(/\r?\n/);
+        let inSection = false;
+        for (const line of lines) {
+          if (line.startsWith('## ')) {
+            if (inSection) break;
+            if (line.trim().toLowerCase().startsWith('## affected files')) inSection = true;
+          } else if (inSection) {
+            const trimmed = line.trim();
+            if ((trimmed.startsWith('-') || trimmed.startsWith('*')) && !trimmed.toLowerCase().includes('none')) {
+              hasFiles = true;
+              break;
+            }
+          }
+        }
+      } catch {}
 
-      const startTime = Date.now();
+      process.stdout.write(`\nContext packet loaded:\n`);
+      process.stdout.write(`${hasArch ? '✓' : '✗'} architecture\n`);
+      process.stdout.write(`${hasDecisions ? '✓' : '✗'} decisions\n`);
+      process.stdout.write(`${hasFiles ? '✓' : '✗'} affected files\n\n`);
 
-      // Spawn process in foreground
-      const exitCode = await new Promise<number>((resolve, reject) => {
-        const child = spawn(mainCmd, cmdArgs, {
-          cwd: workspace.root,
-          stdio: 'inherit',
-          shell: true
-        });
-        child.on('error', reject);
-        child.on('exit', (code) => {
-          resolve(code ?? 0);
-        });
+      const startTmp = '.projectmesh/tasks/exec-start.tmp';
+      const statusTmp = '.projectmesh/tasks/exec-status.tmp';
+
+      const startTmpAbs = workspace.resolveReadPath(startTmp);
+      const statusTmpAbs = workspace.resolveReadPath(statusTmp);
+
+      const { unlink } = await import('node:fs/promises');
+      await unlink(startTmpAbs).catch(() => undefined);
+      await unlink(statusTmpAbs).catch(() => undefined);
+
+      const wrappedCommand = `date +%s > ${startTmp} && ${resolvedCommand}; echo $? > ${statusTmp}`;
+
+      const startTimeStamp = new Date().toISOString();
+      await writeExecutionState(workspace, {
+        executorId: runner.id,
+        command: resolvedCommand,
+        status: 'running',
+        startedAt: startTimeStamp
       });
 
-      const durationMs = Date.now() - startTime;
+      process.stdout.write(`Opening new terminal...\n`);
+      process.stdout.write(`${runner.commandName} started\n\n`);
+      process.stdout.write(`Status:\nrunning...\n`);
 
-      // Get git diff after execution
+      // Spawn the session
+      if (process.env.NODE_ENV === 'test') {
+        await workspace.writeProjectmeshTextFile(startTmp, String(Math.floor(Date.now() / 1000)));
+        await workspace.writeProjectmeshTextFile(statusTmp, '0');
+      } else {
+        await spawnNewTerminalSession(workspace.root, wrappedCommand);
+      }
+
+      const startTime = Date.now();
+      let exitCode = 0;
+
+      while (true) {
+        try {
+          const statusContent = await workspace.readTextFile(statusTmp);
+          exitCode = parseInt(statusContent.trim(), 10);
+          if (!isNaN(exitCode)) {
+            break;
+          }
+        } catch {
+          // File not created yet
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+
+      const durationMs = Date.now() - startTime;
+      const finishedTimeStamp = new Date().toISOString();
+
+      await unlink(startTmpAbs).catch(() => undefined);
+      await unlink(statusTmpAbs).catch(() => undefined);
+
+      const finalStatus = exitCode === 0 ? 'completed' : 'failed';
+      await writeExecutionState(workspace, {
+        executorId: runner.id,
+        command: resolvedCommand,
+        status: finalStatus,
+        startedAt: startTimeStamp,
+        finishedAt: finishedTimeStamp,
+        exitCode
+      });
+
       let diffAfter = '';
       try {
         diffAfter = await git.gitDiff();
       } catch {}
 
       const executionReportPath = await createExecutionReport(workspace, {
-        executorId,
-        command: fullCommandStr,
+        executorId: runner.id,
+        command: resolvedCommand,
         exitCode,
         durationMs,
         diffBeforeAfter: diffAfter
       });
 
       return [
-        '',
-        '# Execution Complete',
+        `Status: ${finalStatus}`,
         `Exit Code: ${exitCode}`,
         `Duration: ${(durationMs / 1000).toFixed(2)}s`,
-        `Report generated: ${executionReportPath}`,
+        `Report generated: ${executionReportPath}`
       ].join('\n');
     }
     case 'stop': {

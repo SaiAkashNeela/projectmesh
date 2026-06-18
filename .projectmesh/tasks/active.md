@@ -33,4 +33,4 @@ Task dispatch should retry failures up to three times and only report success af
 - Preserve MCP security boundaries.
 
 ## Status
-active
+completed

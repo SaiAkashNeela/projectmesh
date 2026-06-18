@@ -113,4 +113,102 @@ describe('projectmesh workspace document flows', () => {
     expect(decisions).toContain('dedicated MCP permission layer');
     expect(architecture).toContain('Architecture note');
   });
+
+  test('retries task creation on temporary failures and succeeds eventually', async () => {
+    const root = await createRepoFixture();
+    const workspace = createWorkspace(root);
+    await ensureProjectmeshWorkspace(workspace);
+
+    let writeCalls = 0;
+    const originalWrite = workspace.writeProjectmeshTextFile;
+    workspace.writeProjectmeshTextFile = async (relativePath, content) => {
+      writeCalls++;
+      if (writeCalls < 3) {
+        throw new Error(`Write failed attempt ${writeCalls}`);
+      }
+      return originalWrite.call(workspace, relativePath, content);
+    };
+
+    const taskInput = {
+      objective: 'Retry task success',
+      background: 'Testing retry behavior',
+      requirements: ['Req 1'],
+      affectedFiles: [],
+      implementationPlan: [],
+      acceptanceCriteria: [],
+      risks: [],
+      status: 'active',
+    };
+
+    const pathCreated = await createTask(workspace, taskInput);
+    expect(pathCreated).toContain('.projectmesh/tasks/active.md');
+    expect(writeCalls).toBe(3);
+
+    const content = await readFile(pathCreated, 'utf8');
+    expect(content).toContain('Retry task success');
+  });
+
+  test('fails task creation after 3 failed attempts and reports errors', async () => {
+    const root = await createRepoFixture();
+    const workspace = createWorkspace(root);
+    await ensureProjectmeshWorkspace(workspace);
+
+    let writeCalls = 0;
+    workspace.writeProjectmeshTextFile = async () => {
+      writeCalls++;
+      throw new Error(`Disk full error ${writeCalls}`);
+    };
+
+    const taskInput = {
+      objective: 'Retry task failure',
+      background: 'Testing failure retry behavior',
+      requirements: ['Req 2'],
+      affectedFiles: [],
+      implementationPlan: [],
+      acceptanceCriteria: [],
+      risks: [],
+      status: 'active',
+    };
+
+    await expect(createTask(workspace, taskInput)).rejects.toThrow(
+      'Failed to create task after 3 attempts. The task was not sent. Last error: Disk full error 3'
+    );
+    expect(writeCalls).toBe(3);
+  });
+
+  test('retries task creation if verification fails', async () => {
+    const root = await createRepoFixture();
+    const workspace = createWorkspace(root);
+    await ensureProjectmeshWorkspace(workspace);
+
+    let readCalls = 0;
+    const originalRead = workspace.readTextFile;
+    workspace.readTextFile = async (relativePath) => {
+      readCalls++;
+      if (relativePath === '.projectmesh/tasks/active.md') {
+        if (readCalls < 3) {
+          return 'corrupted content';
+        }
+      }
+      return originalRead.call(workspace, relativePath);
+    };
+
+    const taskInput = {
+      objective: 'Verification retry task',
+      background: 'Testing verification failure retry',
+      requirements: ['Req 3'],
+      affectedFiles: [],
+      implementationPlan: [],
+      acceptanceCriteria: [],
+      risks: [],
+      status: 'active',
+    };
+
+    const pathCreated = await createTask(workspace, taskInput);
+    expect(pathCreated).toContain('.projectmesh/tasks/active.md');
+    expect(readCalls).toBeGreaterThanOrEqual(3);
+
+    const content = await readFile(pathCreated, 'utf8');
+    expect(content).toContain('Verification retry task');
+  });
 });
