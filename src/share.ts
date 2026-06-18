@@ -349,6 +349,12 @@ function isPidAlive(pid: number) {
 }
 
 export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1') {
+  const mcpServer = await buildMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+  });
+  await mcpServer.connect(transport);
+
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? `${host}:${port}`}`);
@@ -359,7 +365,7 @@ export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1
         return;
       }
 
-      if (url.pathname !== MCP_HTTP_PATH) {
+      if (!url.pathname.startsWith(MCP_HTTP_PATH)) {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         res.end('Not Found');
         return;
@@ -378,11 +384,6 @@ export async function startHttpMcpServer(port = MCP_HTTP_PORT, host = '127.0.0.1
       }
 
       await sessionStore.run({ sessionId }, async () => {
-        const mcpServer = await buildMcpServer();
-        const transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-        });
-        await mcpServer.connect(transport);
         await transport.handleRequest(req, res);
       });
     } catch (error) {

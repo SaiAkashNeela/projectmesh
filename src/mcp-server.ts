@@ -11,39 +11,55 @@ import { createWorkspace } from './workspace.js';
 export const sessionStore = new AsyncLocalStorage<{ sessionId: string }>();
 export const sessionWorkspaceMap = new Map<string, string>(); // sessionId -> repoId
 
-export async function getSessionApi() {
+export async function getPlatformApi(repoId?: string) {
   const session = sessionStore.getStore();
   const sessionId = session ? session.sessionId : 'default';
 
-  let repoId = sessionWorkspaceMap.get(sessionId);
+  let targetRepoId = repoId;
   const config = await readReposConfig();
 
-  if (!repoId) {
+  if (!targetRepoId) {
+    targetRepoId = sessionWorkspaceMap.get(sessionId);
+  }
+
+  if (!targetRepoId) {
     const currentDir = path.resolve(process.cwd());
     const matchingRepo = config.repos.find((r) => path.resolve(r.root) === currentDir);
     if (matchingRepo) {
-      repoId = matchingRepo.id;
-      sessionWorkspaceMap.set(sessionId, repoId);
+      targetRepoId = matchingRepo.id;
+      sessionWorkspaceMap.set(sessionId, targetRepoId);
     } else {
       const activeRepo = await getActiveRepo();
-      repoId = activeRepo.id;
-      sessionWorkspaceMap.set(sessionId, repoId);
+      targetRepoId = activeRepo.id;
+      sessionWorkspaceMap.set(sessionId, targetRepoId);
     }
   }
 
-  const repo = config.repos.find((r) => r.id === repoId);
+  const repo = config.repos.find(
+    (r) => r.id === targetRepoId || r.name === targetRepoId || path.resolve(r.root) === (targetRepoId ? path.resolve(targetRepoId) : ''),
+  );
   if (!repo) {
-    throw new Error(`Workspace ${repoId} is not registered.`);
+    throw new Error(`Workspace ${targetRepoId} is not registered.`);
+  }
+
+  // Hard guard safety check
+  if (repoId && repo.id !== repoId && repo.name !== repoId && path.resolve(repo.root) !== path.resolve(repoId)) {
+    throw new Error(`Workspace mismatch. Expected ${repoId}, resolved ${repo.id}`);
   }
 
   const workspace = createWorkspace(repo.root);
-  return createPlatformApi(workspace);
+  return {
+    api: createPlatformApi(workspace),
+    workspace,
+    repo,
+  };
 }
 
+// Kept for backwards compatibility if needed, but tool handlers should call getPlatformApi directly.
 export const api = new Proxy({} as any, {
   get(target, prop) {
     return async (...args: any[]) => {
-      const activeApi = await getSessionApi();
+      const { api: activeApi } = await getPlatformApi();
       return (activeApi as any)[prop](...args);
     };
   }
@@ -109,83 +125,305 @@ export async function buildMcpServer() {
   server.registerTool(
     'read_file',
     {
-      description: 'Read a text file inside the active repository workspace.',
-      inputSchema: z.object({ path: z.string() }),
+      description: 'Read a text file inside the target repository workspace.',
+      inputSchema: z.object({
+        path: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path (e.g. 'projectmesh')."),
+      }),
     },
-    async ({ path }) => ({ content: [{ type: 'text', text: await api.readFile({ path }) }] }),
+    async ({ path: p, repoId }) => {
+      const { api: activeApi } = await getPlatformApi(repoId);
+      return { content: [{ type: 'text', text: await activeApi.readFile({ path: p }) }] };
+    },
   );
 
   server.registerTool(
     'list_files',
     {
-      description: 'List files within the active repository workspace.',
-      inputSchema: z.object({ path: z.string().optional(), limit: z.number().int().positive().optional() }),
+      description: 'List files within the target repository workspace.',
+      inputSchema: z.object({
+        path: z.string().optional(),
+        limit: z.number().int().positive().optional(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await api.listFiles(input), null, 2) }],
-    }),
+    async ({ path: p, limit, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const files = await activeApi.listFiles({ path: p, limit });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                files,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'search_code',
     {
       description: 'Search repository code for a case-insensitive text query.',
-      inputSchema: z.object({ query: z.string(), limit: z.number().int().positive().optional() }),
+      inputSchema: z.object({
+        query: z.string(),
+        limit: z.number().int().positive().optional(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await api.searchCode(input), null, 2) }],
-    }),
+    async ({ query, limit, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const matches = await activeApi.searchCode({ query, limit });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                matches,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'get_project_structure',
     {
-      description: 'Return a shallow project tree for the active workspace.',
-      inputSchema: z.object({ maxDepth: z.number().int().min(0).optional() }),
+      description: 'Return a shallow project tree for the target workspace.',
+      inputSchema: z.object({
+        maxDepth: z.number().int().min(0).optional(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await api.getProjectStructure(input), null, 2) }],
-    }),
+    async ({ maxDepth, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const structure = await activeApi.getProjectStructure({ maxDepth });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                structure,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'get_project_context',
     {
-      description: 'Summarize repository context and analysis for the active workspace.',
-      inputSchema: z.object({}),
+      description: 'Summarize repository context and analysis for the target workspace.',
+      inputSchema: z.object({
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async () => ({
-      content: [{ type: 'text', text: JSON.stringify(await api.getProjectContext(), null, 2) }],
-    }),
+    async ({ repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const context = await activeApi.getProjectContext();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                ...context,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'git_status',
-    { description: 'Return `git status --short` for the active repository.', inputSchema: z.object({}) },
-    async () => ({ content: [{ type: 'text', text: await api.gitStatus() }] }),
+    {
+      description: 'Return `git status --short` for the target repository.',
+      inputSchema: z.object({
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
+    },
+    async ({ repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const status = await activeApi.gitStatus();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                status,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'git_diff',
-    { description: 'Return `git diff` for the active repository.', inputSchema: z.object({}) },
-    async () => ({ content: [{ type: 'text', text: await api.gitDiff() }] }),
+    {
+      description: 'Return `git diff` for the target repository.',
+      inputSchema: z.object({
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
+    },
+    async ({ repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const diff = await activeApi.gitDiff();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                diff,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'git_log',
     {
-      description: 'Return recent git log entries for the active repository.',
-      inputSchema: z.object({ limit: z.number().int().positive().optional() }),
+      description: 'Return recent git log entries for the target repository.',
+      inputSchema: z.object({
+        limit: z.number().int().positive().optional(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await api.gitLog(input), null, 2) }],
-    }),
+    async ({ limit, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const log = await activeApi.gitLog({ limit });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                log,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'git_branch',
-    { description: 'Return the current branch and known local branches.', inputSchema: z.object({}) },
-    async () => ({ content: [{ type: 'text', text: JSON.stringify(await api.gitBranch(), null, 2) }] }),
+    {
+      description: 'Return the current branch and known local branches.',
+      inputSchema: z.object({
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
+    },
+    async ({ repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const branchInfo = await activeApi.gitBranch();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                ...branchInfo,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.registerTool(
+    'git_command',
+    {
+      description: 'Run an arbitrary git command inside the target repository workspace. Dangerous operations (merge, rebase, force options) are restricted for security.',
+      inputSchema: z.object({
+        args: z.array(z.string()).describe("The arguments to pass to git, e.g. ['commit', '-m', 'message'], ['add', '.'], or ['checkout', '-b', 'branch']."),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
+    },
+    async ({ args, repoId }) => {
+      try {
+        const { api: activeApi, repo } = await getPlatformApi(repoId);
+        const result = await activeApi.runGitCommand({ args });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  activeWorkspace: repo.id,
+                  root: repo.root,
+                  ...result,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: error instanceof Error ? error.message : String(error),
+            },
+          ],
+          isError: true,
+        };
+      }
+    },
   );
 
   server.registerTool(
@@ -202,12 +440,29 @@ export async function buildMcpServer() {
         acceptanceCriteria: z.array(z.string()),
         risks: z.array(z.string()),
         status: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
       }),
     },
-    async (input) => {
+    async ({ repoId, ...taskData }) => {
       try {
-        const text = await api.createTask(input);
-        return { content: [{ type: 'text', text }] };
+        const { api: activeApi, repo } = await getPlatformApi(repoId);
+        const message = await activeApi.createTask(taskData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  activeWorkspace: repo.id,
+                  root: repo.root,
+                  message,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
       } catch (error) {
         return {
           content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
@@ -231,12 +486,29 @@ export async function buildMcpServer() {
         acceptanceCriteria: z.array(z.string()),
         risks: z.array(z.string()),
         status: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
       }),
     },
-    async (input) => {
+    async ({ repoId, ...taskData }) => {
       try {
-        const text = await api.updateTask(input);
-        return { content: [{ type: 'text', text }] };
+        const { api: activeApi, repo } = await getPlatformApi(repoId);
+        const message = await activeApi.updateTask(taskData);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  activeWorkspace: repo.id,
+                  root: repo.root,
+                  message,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
       } catch (error) {
         return {
           content: [{ type: 'text', text: error instanceof Error ? error.message : String(error) }],
@@ -253,10 +525,30 @@ export async function buildMcpServer() {
       inputSchema: z.object({
         id: z.string().optional().describe('The ID of the task to complete (e.g. task-001). If not provided, completes the default active task.'),
         summary: z.string(),
-        finalStatus: z.string()
+        finalStatus: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
       }),
     },
-    async (input) => ({ content: [{ type: 'text', text: await api.completeTask(input) }] }),
+    async ({ repoId, ...completeData }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const message = await activeApi.completeTask(completeData);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                message,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
@@ -264,16 +556,27 @@ export async function buildMcpServer() {
     {
       description: 'Generate and retrieve the self-contained task packet containing the task description, repo architecture, coding style, architectural decisions, and the content of all affected source files.',
       inputSchema: z.object({
-        taskId: z.string().optional().describe('The ID of the task to generate packet for (e.g. task-001). If not provided, generates packet for default active task.')
+        taskId: z.string().optional().describe('The ID of the task to generate packet for (e.g. task-001). If not provided, generates packet for default active task.'),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
       }),
     },
-    async (input) => {
-      const result = await api.generateTaskPacket(input);
+    async ({ taskId, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const result = await activeApi.generateTaskPacket({ taskId });
       return {
         content: [
           {
             type: 'text',
-            text: `Task Packet generated successfully at: ${result.filePath}\n\n${result.content}`,
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                filePath: result.filePath,
+                content: result.content,
+              },
+              null,
+              2,
+            ),
           },
         ],
       };
@@ -287,15 +590,26 @@ export async function buildMcpServer() {
       inputSchema: z.object({
         executorId: z.string().describe("The ID of the executor agent (e.g. 'claude', 'gemini', 'codex', 'custom')"),
         taskId: z.string().optional().describe("The ID of the task to execute (e.g. 'task-001'). If not provided, it defaults to the active task."),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
       }),
     },
-    async ({ executorId, taskId }) => {
-      const pendingPath = await api.requestExecution({ executorId, taskId });
+    async ({ executorId, taskId, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const pendingPath = await activeApi.requestExecution({ executorId, taskId });
       return {
         content: [
           {
             type: 'text',
-            text: `Execution request registered. For security, you must approve and run this command from your terminal: run 'projectmesh execute' to start it.`,
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                message: `Execution request registered. For security, you must approve and run this command from your terminal: run 'projectmesh execute' to start it.`,
+                pendingPath,
+              },
+              null,
+              2,
+            ),
           },
         ],
       };
@@ -306,27 +620,95 @@ export async function buildMcpServer() {
     'create_review',
     {
       description: 'Create a review document under `.projectmesh/reviews/`.',
-      inputSchema: z.object({ title: z.string(), body: z.string(), kind: z.string() }),
+      inputSchema: z.object({
+        title: z.string(),
+        body: z.string(),
+        kind: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({ content: [{ type: 'text', text: await api.createReview(input) }] }),
+    async ({ repoId, ...reviewData }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const message = await activeApi.createReview(reviewData);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                message,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'update_memory',
     {
       description: 'Append durable knowledge to `.projectmesh/memory.md`.',
-      inputSchema: z.object({ content: z.string() }),
+      inputSchema: z.object({
+        content: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({ content: [{ type: 'text', text: await api.updateMemory(input) }] }),
+    async ({ content, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const message = await activeApi.updateMemory({ content });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                message,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
     'update_decision',
     {
       description: 'Append an architectural decision to `.projectmesh/decisions.md`.',
-      inputSchema: z.object({ content: z.string() }),
+      inputSchema: z.object({
+        content: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({ content: [{ type: 'text', text: await api.updateDecision(input) }] }),
+    async ({ content, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const message = await activeApi.updateDecision({ content });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                message,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   server.registerTool(
@@ -337,14 +719,48 @@ export async function buildMcpServer() {
         content: z.string().optional(),
         append: z.boolean().optional(),
         regenerateFromAnalysis: z.boolean().optional(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
       }),
     },
-    async (input) => {
-      if (input.regenerateFromAnalysis) {
-        const analysis = await api.analyzeRepository();
-        return { content: [{ type: 'text', text: await api.updateArchitecture({ analysis }) }] };
+    async ({ content, append, regenerateFromAnalysis, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      if (regenerateFromAnalysis) {
+        const analysis = await activeApi.analyzeRepository();
+        const message = await activeApi.updateArchitecture({ analysis });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(
+                {
+                  activeWorkspace: repo.id,
+                  root: repo.root,
+                  message,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        };
       }
-      return { content: [{ type: 'text', text: await api.updateArchitecture(input) }] };
+      const message = await activeApi.updateArchitecture({ content, append });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                message,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
     },
   );
 
@@ -352,11 +768,31 @@ export async function buildMcpServer() {
     'verify_projectmesh_write_permissions',
     {
       description: 'Check whether a path is writable under the `.projectmesh`-only security policy.',
-      inputSchema: z.object({ path: z.string() }),
+      inputSchema: z.object({
+        path: z.string(),
+        repoId: z.string().optional().describe("Optional target repository ID or path."),
+      }),
     },
-    async (input) => ({
-      content: [{ type: 'text', text: JSON.stringify(await api.verifyProjectmeshWritePermissions(input), null, 2) }],
-    }),
+    async ({ path: p, repoId }) => {
+      const { api: activeApi, repo } = await getPlatformApi(repoId);
+      const result = await activeApi.verifyProjectmeshWritePermissions({ path: p });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              {
+                activeWorkspace: repo.id,
+                root: repo.root,
+                ...result,
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      };
+    },
   );
 
   return server;

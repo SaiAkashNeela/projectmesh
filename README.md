@@ -121,6 +121,7 @@ Projectmesh supports registering multiple workspaces and isolating them across d
 3. **Workspace MCP Tools**:
    * **`list_workspaces`**: Returns all registered workspaces, showing their registration paths and identifying the workspace currently active for the caller's session.
    * **`switch_workspace`**: Dynamically switches the workspace context for the current chat session to another registered repository using its ID or path.
+   * **`git_command`**: Runs arbitrary git commands (e.g. `status`, `diff`, `add`, `commit`, `push`, `stash`) in the target workspace context. Operations like `merge`, `rebase`, and force flags (`--force`, `-f`) are strictly blocked for security.
 
 ## Commands
 

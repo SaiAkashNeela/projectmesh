@@ -47,6 +47,9 @@ export function createPlatformApi(workspace: Workspace) {
     gitBranch() {
       return git.gitBranch();
     },
+    runGitCommand(input: { args: string[] }) {
+      return git.runGitCommand(input.args);
+    },
     async createTask(input: Parameters<typeof createTask>[1]) {
       await ensureProjectmeshWorkspace(workspace);
       return createTask(workspace, input);

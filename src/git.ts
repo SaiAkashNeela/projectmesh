@@ -13,6 +13,34 @@ async function runGit(workspace: Workspace, args: string[]) {
 
 export function createGitTools(workspace: Workspace) {
   return {
+    async runGitCommand(args: string[]) {
+      if (args.length === 0) {
+        throw new Error('No git arguments provided.');
+      }
+      const subcommand = args[0].toLowerCase().trim();
+      if (subcommand === 'merge' || subcommand === 'rebase') {
+        throw new Error(`Git subcommand '${subcommand}' is restricted for security.`);
+      }
+      for (const arg of args) {
+        const normalized = arg.toLowerCase().trim();
+        if (normalized === '-f' || normalized === '--force' || normalized.startsWith('--force-')) {
+          throw new Error('Force flags are restricted for security.');
+        }
+      }
+      try {
+        const { stdout, stderr } = await execFileAsync('git', args, { cwd: workspace.root });
+        return {
+          stdout: stdout.trim(),
+          stderr: stderr.trim(),
+        };
+      } catch (error: any) {
+        return {
+          stdout: error.stdout?.trim() ?? '',
+          stderr: error.stderr?.trim() ?? error.message,
+          exitCode: error.code ?? 1,
+        };
+      }
+    },
     async gitStatus() {
       return runGit(workspace, ['status', '--short']);
     },

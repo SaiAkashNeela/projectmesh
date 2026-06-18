@@ -75,6 +75,23 @@ describe('multi-repository workspace registry and session isolation', () => {
       const taskResult = await callTool('read_file', { path: '.projectmesh/tasks/active.md' });
       expect(taskResult.content[0].text).toContain('Hello from repo-one');
     });
+
+    // 3. Test explicit repoId parameter: Session A reads from repo-one by passing explicit repoId, despite being switched to repo-two
+    await sessionStore.run({ sessionId: 'session-a' }, async () => {
+      const explicitResult = await callTool('read_file', {
+        path: '.projectmesh/tasks/active.md',
+        repoId: 'repo-one'
+      });
+      expect(explicitResult.content[0].text).toContain('Hello from repo-one');
+    });
+
+    // 4. Test error handling for unregistered workspace targeting
+    await sessionStore.run({ sessionId: 'session-a' }, async () => {
+      await expect(callTool('read_file', {
+        path: '.projectmesh/tasks/active.md',
+        repoId: 'non-existent-repo'
+      })).rejects.toThrow('not registered');
+    });
   });
 
   test('CLI use and new commands auto-initialize workspaces if they do not exist', async () => {
